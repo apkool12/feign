@@ -1,26 +1,170 @@
 @import "tailwindcss";
 
+/* 마을과 같은 색조를 쓴다: 먹색 외곽선, 양피지색 면, 풀빛 유리 */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --ink: #2b2118;
+  --parchment: #f4ecd2;
+  --moss: 40 58 28;
+  --sun: #ffd23f;
+  --blood: #d9443a;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-sans: var(--font-body);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: #1d2a16;
+  color: var(--parchment);
+  font-family: var(--font-body), system-ui, sans-serif;
+}
+
+.hud-display {
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-weight: 400;
+}
+
+/* 마을이 비쳐 보이는 띠 */
+.hud-glass {
+  background: rgb(var(--moss) / 0.62);
+  border-radius: 14px;
+  backdrop-filter: blur(3px);
+}
+
+/* 역할을 한 글자로 새긴 패 */
+.hud-tile {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  background: var(--parchment);
+  color: var(--ink);
+  border: 2px solid var(--ink);
+  border-radius: 7px;
+  box-shadow: 0 2px 0 var(--ink);
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+/* 그림이 든 패는 그림 자체에 테두리가 있으므로 패의 테두리를 걷는다 */
+.hud-tile-img {
+  width: 2.25rem;
+  height: 2.25rem;
+  background: none;
+  border: 0;
+  box-shadow: none;
+}
+
+/* 눌리는 느낌의 버튼 */
+.hud-btn {
+  font-family: var(--font-display), system-ui, sans-serif;
+  background: var(--parchment);
+  color: var(--ink);
+  border: 2.5px solid var(--ink);
+  border-radius: 12px;
+  padding: 0.4rem 0.9rem;
+  box-shadow: 0 4px 0 var(--ink);
+  transition:
+    transform 0.06s,
+    box-shadow 0.06s;
+}
+.hud-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+.hud-btn:active:not(:disabled),
+.hud-btn[aria-pressed="true"] {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 var(--ink);
+}
+.hud-btn-go,
+.hud-btn[aria-pressed="true"] {
+  background: var(--sun);
+}
+.hud-btn-danger[aria-pressed="true"] {
+  background: var(--blood);
+  color: #fff;
+}
+.hud-btn:disabled {
+  opacity: 0.5;
+}
+.hud-btn:focus-visible,
+.hud-field:focus-visible {
+  outline: 3px solid var(--sun);
+  outline-offset: 2px;
+}
+
+.hud-field {
+  background: var(--parchment);
+  color: var(--ink);
+  border: 2.5px solid var(--ink);
+  border-radius: 12px;
+  padding: 0.4rem 0.7rem;
+}
+.hud-field::placeholder {
+  color: rgb(43 33 24 / 0.55);
+}
+.hud-field:disabled {
+  opacity: 0.6;
+}
+
+/* 말풍선 */
+.hud-chip {
+  background: rgb(244 236 210 / 0.92);
+  color: var(--ink);
+  border-radius: 10px;
+  padding: 0.2rem 0.55rem;
+}
+
+/* 밤이 지나거나 투표가 끝났을 때 내려왔다가 사라지는 팻말 */
+.hud-sign {
+  background: var(--parchment);
+  color: var(--ink);
+  border: 3px solid var(--ink);
+  border-radius: 14px;
+  box-shadow: 0 5px 0 var(--ink);
+  animation:
+    sign-in 0.35s ease-out,
+    sign-out 0.5s ease-in 10s forwards;
+}
+@keyframes sign-in {
+  from {
+    transform: translateY(-140%);
+  }
+}
+@keyframes sign-out {
+  to {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+.hud-sun,
+.hud-moon {
+  display: inline-block;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+}
+.hud-sun {
+  background: var(--sun);
+  border: 2.5px solid var(--ink);
+}
+.hud-moon {
+  box-shadow: inset -0.5rem -0.1rem 0 0 #e8ecff;
+}
+
+.hud-shadow {
+  text-shadow:
+    0 1px 0 var(--ink),
+    0 0 6px rgb(0 0 0 / 0.6);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-btn {
+    transition: none;
+  }
+  .hud-sign {
+    animation: sign-out 0.01s 10s forwards;
+  }
 }

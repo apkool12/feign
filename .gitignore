@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# 원작 게임의 역할 그림 (저작권이 있어 저장소에 올리지 않는다)
+/public/roles/

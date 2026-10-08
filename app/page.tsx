@@ -1,7 +1,17 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
-import { MAX_PLAYERS, MIN_PLAYERS, ROLES, SKIP, TEAM_NAME, type Mode, type Role, type View } from "../game";
+import { COLORS } from "./colors";
+import type { Positions } from "./Village";
+import { DAY_CHOICES, INSANE, MAX_PLAYERS, MIN_PLAYERS, NIGHT_CHOICES, POOL, ROLES, SKIP, TEAM_NAME } from "../game";
+import type { Mode, Role, Slot, Team, View } from "../game";
+
+// WebGL은 브라우저에서만 돌므로 서버 렌더링에서 뺀다
+const Village = dynamic(() => import("./Village"), {
+  ssr: false,
+  loading: () => <p className="p-4 text-sm opacity-80">마을을 불러오는 중…</p>,
+});
 
 // ponytail: sessionStorage라 탭마다 다른 사람이고(한 PC에서 여러 탭으로 테스트 가능),
 // 새로고침은 버티지만 탭을 닫으면 자리를 잃는다 — 불편하면 localStorage로.
@@ -39,8 +49,29 @@ function beep() {
   } catch {}
 }
 
-const btn = "rounded-lg bg-indigo-600 px-4 py-2 font-medium text-white hover:bg-indigo-500 disabled:opacity-40";
-const subBtn = "rounded-lg border border-zinc-700 px-4 py-2 text-zinc-200 hover:bg-zinc-800 disabled:opacity-40";
+const btn = "hud-btn hud-btn-go"; // 판을 진행시키는 버튼
+const subBtn = "hud-btn";
+
+// 역할 패에 새기는 한 글자
+const ROLE_MARK: Record<Slot["role"], string> = {
+  insane: "정",
+  doctor: "의",
+  blocker: "경",
+  lookout: "감",
+  investigator: "수",
+  trapper: "덫",
+  snitch: "밀",
+  provoker: "선",
+  tracker: "추",
+  cleaner: "청",
+  blamer: "탓",
+  survivor: "생",
+  serialKiller: "살",
+  bomber: "폭",
+  thief: "도",
+  sorcerer: "마",
+  haunter: "무",
+};
 
 export default function Page() {
   const [view, setView] = useState<View | null>(null);
@@ -49,6 +80,7 @@ export default function Page() {
   const [online, setOnline] = useState(false);
   const ws = useRef<WebSocket | null>(null);
   const saved = useRef<Saved>({ token: "" });
+  const positions = useRef<Positions>(new Map()); // 다른 플레이어들의 위치. 매 프레임 읽으므로 state에 두지 않는다
 
   const send = (m: object) => {
     if (ws.current?.readyState === WebSocket.OPEN) ws.current.send(JSON.stringify(m));
@@ -76,6 +108,8 @@ export default function Page() {
           setView(state);
           setDue(state.remaining === null ? null : Date.now() + state.remaining);
           setError("");
+        } else if (m.t === "pos") {
+          positions.current.set(m.id, { x: m.x, z: m.z });
         } else {
           setError(m.msg);
           if (!joined) {
@@ -108,15 +142,17 @@ export default function Page() {
   };
 
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4 bg-zinc-950 p-4 text-zinc-100">
-      {error && (
-        <p role="alert" className="rounded-lg bg-red-950 px-3 py-2 text-red-200">
-          {error}
-        </p>
-      )}
-      {!online && <p className="text-sm text-zinc-400">서버에 연결하는 중…</p>}
+    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 p-4">
+      <div className="pointer-events-none fixed inset-x-0 top-3 z-30 flex flex-col items-center gap-2 px-3">
+        {error && (
+          <p role="alert" className="hud-chip border-2 border-[var(--blood)]">
+            {error}
+          </p>
+        )}
+        {!online && <p className="hud-chip text-sm">서버에 연결하는 중…</p>}
+      </div>
       {view ? (
-        <Game view={view} due={due} send={send} leave={leave} />
+        <Game view={view} due={due} positions={positions} send={send} leave={leave} />
       ) : (
         <form
           className="m-auto flex w-full max-w-xs flex-col gap-3"
@@ -128,10 +164,10 @@ export default function Page() {
             send({ t: "join", token: saved.current.token, name, code: String(fd.get("code")) });
           }}
         >
-          <h1 className="text-3xl font-bold">Feign</h1>
+          <h1 className="hud-display text-6xl">Feign</h1>
           <label className="flex flex-col gap-1 text-sm">
             닉네임
-            <input name="name" required maxLength={12} className="rounded-lg bg-zinc-800 px-3 py-2 text-base" />
+            <input name="name" required maxLength={12} className="hud-field text-base" />
           </label>
           <label className="flex flex-col gap-1 text-sm">
             방 코드 (비우면 새 방을 만듭니다)
@@ -140,7 +176,7 @@ export default function Page() {
               maxLength={4}
               autoCapitalize="characters"
               autoComplete="off"
-              className="rounded-lg bg-zinc-800 px-3 py-2 text-base uppercase"
+              className="hud-field text-base uppercase"
             />
           </label>
           <button className={btn} disabled={!online}>
@@ -152,10 +188,16 @@ export default function Page() {
   );
 }
 
-type GameProps = { view: View; due: number | null; send: (m: object) => void; leave: () => void };
+type GameProps = {
+  view: View;
+  due: number | null;
+  positions: React.RefObject<Positions>;
+  send: (m: object) => void;
+  leave: () => void;
+};
 
 // 화면은 view를 그리고 send로 행동을 보내기만 한다. 3D 마을로 바꿀 때 갈아 끼울 자리가 이 컴포넌트다.
-function Game({ view, due, send, leave }: GameProps) {
+function Game({ view, due, positions, send, leave }: GameProps) {
   const { me, phase, players } = view;
   const isHost = view.hostId === me.id;
   const night = phase === "night";
@@ -232,184 +274,453 @@ function Game({ view, due, send, leave }: GameProps) {
     send(killed ? { t: "act", mode: "kill", target: killed, extra: aimed ?? "" } : { t: "act", mode: "ability", target: aimed });
   };
 
-  return (
-    <>
-      <header className="flex items-start justify-between gap-2">
-        <div>
-          <h1 className="text-2xl font-bold">
-            {title}
-            {playing && due !== null && <Countdown due={due} />}
-          </h1>
-          <p className="text-sm text-zinc-400">
-            방 코드 <span className="font-mono text-base text-zinc-100">{view.code}</span>
-            {role && (
-              <>
-                {" · 내 역할 "}
-                <b className="text-zinc-100">
-                  {role.name} ({TEAM_NAME[me.team]})
-                </b>
-              </>
-            )}
-          </p>
-          {role && <p className="text-sm text-zinc-400">{role.desc}</p>}
-        </div>
-        <button className={subBtn} onClick={leave}>
-          나가기
-        </button>
-      </header>
+  // 좌석별 표시 정보. 마을(3D)과 목록(2D)이 같은 값을 그린다.
+  const [asList, setAsList] = useState(false);
+  const seats = players.map((p) => {
+    const isMe = p.id === me.id;
+    const usable = night
+      ? !!mode && !isMe && !(mode === "kill" && p.ally) && !(mode === "ability" && me.blocked === p.id)
+      : phase === "day";
+    const killing = night && me.act?.mode === "kill" && me.act.target === p.id;
+    const aiming = night && (me.act?.mode === "ability" ? me.act.target : me.act?.extra) === p.id;
+    const voting = !night && me.pick === p.id;
+    const status = [
+      // 살아 있는 내 역할은 상단에 있으니 뺀다
+      !(isMe && playing && me.alive) && p.label,
+      p.won && "승리",
+      phase !== "lobby" && !p.alive && "사망",
+      p.id === view.hostId && "방장",
+      !p.connected && "연결 끊김",
+      p.doing,
+      killing && "살해 대상",
+      aiming && `${role?.action} 대상`,
+      p.provoked && "선동 +2표",
+      p.bombed && "폭탄 설치됨",
+      p.marked && "양초를 둠",
+      night && me.blocked === p.id && "어젯밤 치료",
+      playing && p.alive && (p.picked ? "선택 완료" : "고민 중"),
+    ]
+      .filter(Boolean)
+      .join(", ");
+    return {
+      id: p.id,
+      name: p.name,
+      alive: p.alive,
+      isMe,
+      ally: p.ally,
+      mayor: p.mayor,
+      enabled: me.alive && p.alive && usable,
+      mark: killing ? ("kill" as const) : aiming ? ("aim" as const) : voting ? ("vote" as const) : null,
+      status,
+      bombed: p.bombed,
+      marked: p.marked,
+      won: p.won,
+    };
+  });
+  const pickSeat = (id: string) => (night ? visit(id) : send({ t: "pick", target: id }));
 
-      {phase !== "lobby" && view.news.length > 0 && (
-        <section aria-live="polite" className="rounded-lg border border-amber-500/60 bg-amber-950/40 px-4 py-3">
-          {view.news.map((line, i) => (
-            <p key={i} className="text-lg font-medium text-amber-100">
-              {line}
-            </p>
-          ))}
-        </section>
-      )}
-
-      {prompt && (
-        <p className="rounded-lg bg-zinc-900 px-3 py-2">
-          {prompt}
-          {idle}
+  const head = (
+    <div>
+      <h1 className="hud-display text-3xl">
+        {title}
+        {playing && due !== null && <Countdown due={due} />}
+      </h1>
+      <p className="text-sm opacity-80">
+        방 코드 <span className="font-mono text-base ">{view.code}</span>
+        {role && (
+          <>
+            {" · 내 역할 "}
+            <b className="">
+              {role.name} ({TEAM_NAME[me.team]})
+            </b>
+          </>
+        )}
+      </p>
+      {role && <p className="text-sm opacity-80">{role.desc}</p>}
+    </div>
+  );
+  const corner = (
+    <div className="flex shrink-0 items-center gap-2">
+      <button className="px-2 text-sm  underline hover:text-white" onClick={() => setAsList(!asList)}>
+        {asList ? "마을로 보기" : "목록으로 보기"}
+      </button>
+      <button className={subBtn} onClick={leave}>
+        나가기
+      </button>
+    </div>
+  );
+  const news = phase !== "lobby" && view.news.length > 0 && (
+    <section aria-live="polite" className="hud-chip px-4 py-3">
+      {view.news.map((line, i) => (
+        <p key={i} className="hud-display text-lg">
+          {line}
         </p>
+      ))}
+    </section>
+  );
+  const promptBox = prompt && (
+    <p className="hud-glass px-3 py-2">
+      {prompt}
+      {idle}
+    </p>
+  );
+  const nightModes = night && me.alive && (
+    <div className="flex flex-wrap items-center gap-2">
+      {me.modes.map((m) =>
+        m === "kill" || m === "ability" ? (
+          <button
+            key={m}
+            className={m === "kill" ? "hud-btn hud-btn-danger" : "hud-btn"}
+            aria-pressed={m === mode}
+            onClick={() => setWanted(m)}
+          >
+            {modeLabel(m)}
+          </button>
+        ) : (
+          <button
+            key={m}
+            className="hud-btn"
+            aria-pressed={me.act?.mode === m}
+            onClick={() => send({ t: "act", mode: m })}
+          >
+            {modeLabel(m)}
+          </button>
+        ),
       )}
-
-      {night && me.alive && (
-        <div className="flex flex-wrap items-center gap-2">
-          {me.modes.map((m) =>
-            m === "kill" || m === "ability" ? (
-              <button key={m} className={m === mode ? btn : subBtn} aria-pressed={m === mode} onClick={() => setWanted(m)}>
-                {modeLabel(m)}
-              </button>
-            ) : (
-              <button
-                key={m}
-                className={me.act?.mode === m ? btn : subBtn}
-                aria-pressed={me.act?.mode === m}
-                onClick={() => send({ t: "act", mode: m })}
-              >
-                {modeLabel(m)}
-              </button>
-            ),
-          )}
-          {me.role === "sorcerer" && (
-            <label className="flex items-center gap-2 text-sm text-zinc-400">
-              맞힐 역할
-              <select
-                value={guess}
-                onChange={(e) => setGuess(e.target.value as Role)}
-                className="rounded-lg bg-zinc-800 px-2 py-2 text-base text-zinc-100"
-              >
-                {(Object.keys(ROLES) as Role[]).map((r) => (
-                  <option key={r} value={r}>
-                    {ROLES[r].name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-        </div>
+      {me.role === "sorcerer" && (
+        <label className="flex items-center gap-2 text-sm opacity-80">
+          맞힐 역할
+          <select
+            value={guess}
+            onChange={(e) => setGuess(e.target.value as Role)}
+            className="hud-field text-base"
+          >
+            {(Object.keys(ROLES) as Role[]).map((r) => (
+              <option key={r} value={r}>
+                {ROLES[r].name}
+              </option>
+            ))}
+          </select>
+        </label>
       )}
+    </div>
+  );
+  const controlsRow = (
+    <div className="flex flex-wrap items-center gap-2">
+      {phase === "day" && me.alive && (
+        <button
+          className="hud-btn"
+          aria-pressed={me.pick === SKIP}
+          onClick={() => send({ t: "pick", target: SKIP })}
+        >
+          기권
+        </button>
+      )}
+      {playing && <span className="text-sm opacity-80">{view.pending}명의 선택을 기다리는 중</span>}
+      {phase === "lobby" && (
+        <span className="text-sm opacity-80">
+          {players.length}/{MAX_PLAYERS}명 · 최소 {MIN_PLAYERS}명
+          {!isHost && " · 방장이 시작하기를 기다리는 중"}
+        </span>
+      )}
+      <span className="flex-1" />
+      {isHost && phase === "lobby" && (
+        <button
+          className={btn}
+          disabled={players.length < MIN_PLAYERS || (!view.setup.auto && view.setup.slots.length !== players.length)}
+          onClick={() => send({ t: "start" })}
+        >
+          게임 시작
+        </button>
+      )}
+      {isHost && playing && (
+        <button className={subBtn} onClick={() => send({ t: "next" })}>
+          기다리지 않고 넘기기
+        </button>
+      )}
+      {isHost && phase === "ended" && (
+        <button className={btn} onClick={() => send({ t: "lobby" })}>
+          대기실로
+        </button>
+      )}
+    </div>
+  );
+  const notesBox = me.notes.length > 0 && (
+    <section>
+      <h2 className="mb-1 text-sm font-medium opacity-80">나만 보는 결과</h2>
+      <ol className="hud-glass flex max-h-32 flex-col gap-1 overflow-y-auto px-3 py-2 text-sm">
+        {me.notes.map((line, i) => (
+          <li key={i}>{line}</li>
+        ))}
+      </ol>
+    </section>
+  );
 
-      <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-        {players.map((p) => {
-          const isMe = p.id === me.id;
-          const usable = night
-            ? !!mode && !isMe && !(mode === "kill" && p.ally) && !(mode === "ability" && me.blocked === p.id)
-            : phase === "day";
-          const killing = night && me.act?.mode === "kill" && me.act.target === p.id;
-          const aiming = night && (me.act?.mode === "ability" ? me.act.target : me.act?.extra) === p.id;
-          const selected = night ? killing || aiming : me.pick === p.id;
-          return (
-            <li key={p.id}>
+  if (asList)
+    return (
+      <>
+        <header className="flex items-start justify-between gap-2">
+          {head}
+          {corner}
+        </header>
+        {news}
+        {promptBox}
+        {phase === "lobby" && <SetupBoard view={view} isHost={isHost} send={send} />}
+        {nightModes}
+        <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {seats.map((s) => (
+            <li key={s.id}>
               <button
-                disabled={!me.alive || !p.alive || !usable}
-                aria-pressed={selected}
-                onClick={() => (night ? visit(p.id) : send({ t: "pick", target: p.id }))}
-                className={`flex w-full flex-col items-start rounded-lg border px-3 py-2 text-left disabled:cursor-default ${
-                  selected ? "border-indigo-400 bg-indigo-950" : "border-zinc-800 bg-zinc-900"
-                } ${p.alive ? "enabled:hover:border-zinc-500" : "opacity-40"}`}
+                disabled={!s.enabled}
+                aria-pressed={!!s.mark}
+                onClick={() => pickSeat(s.id)}
+                className={`hud-glass flex w-full flex-col items-start border-2 px-3 py-2 text-left disabled:cursor-default ${
+                  s.mark ? "border-[var(--sun)]" : "border-transparent"
+                } ${s.alive ? "enabled:hover:border-[var(--parchment)]" : "opacity-40"}`}
               >
                 <span className="font-medium">
-                  {p.name}
-                  {isMe && " (나)"}
-                  {p.mayor && " · 시장"}
+                  {s.mayor && "시장 "}
+                  {s.name}
+                  {s.isMe && " (나)"}
                 </span>
-                <span className="text-xs text-zinc-400">
-                  {[
-                    // 살아 있는 내 역할은 상단에 있으니 카드에서는 뺀다
-                    !(isMe && playing && me.alive) && p.label,
-                    p.won && "승리",
-                    phase !== "lobby" && !p.alive && "사망",
-                    p.id === view.hostId && "방장",
-                    !p.connected && "연결 끊김",
-                    p.doing,
-                    killing && "살해 대상",
-                    aiming && `${role?.action} 대상`,
-                    p.provoked && "선동 +2표",
-                    p.bombed && "폭탄 설치됨",
-                    p.marked && "양초를 둠",
-                    night && me.blocked === p.id && "어젯밤 치료",
-                    playing && p.alive && (p.picked ? "선택 완료" : "고민 중"),
-                  ]
-                    .filter(Boolean)
-                    .join(" · ") || "\u00a0"}
-                </span>
+                <span className="text-xs opacity-80">{s.status || "\u00a0"}</span>
               </button>
             </li>
-          );
-        })}
-      </ul>
+          ))}
+        </ul>
+        {controlsRow}
+        <Chat view={view} send={send} />
+        {notesBox}
+      </>
+    );
 
-      <div className="flex flex-wrap items-center gap-2">
-        {phase === "day" && me.alive && (
-          <button
-            className={me.pick === SKIP ? btn : subBtn}
-            aria-pressed={me.pick === SKIP}
-            onClick={() => send({ t: "pick", target: SKIP })}
-          >
-            기권
-          </button>
-        )}
-        {playing && <span className="text-sm text-zinc-400">{view.pending}명의 선택을 기다리는 중</span>}
-        {phase === "lobby" && (
-          <span className="text-sm text-zinc-400">
-            {players.length}/{MAX_PLAYERS}명 · 최소 {MIN_PLAYERS}명
-            {!isHost && " · 방장이 시작하기를 기다리는 중"}
-          </span>
-        )}
-        <span className="flex-1" />
-        {isHost && phase === "lobby" && (
-          <button className={btn} disabled={players.length < MIN_PLAYERS} onClick={() => send({ t: "start" })}>
-            게임 시작
-          </button>
-        )}
-        {isHost && playing && (
-          <button className={subBtn} onClick={() => send({ t: "next" })}>
-            기다리지 않고 넘기기
-          </button>
-        )}
-        {isHost && phase === "ended" && (
-          <button className={btn} onClick={() => send({ t: "lobby" })}>
-            대기실로
-          </button>
+  // 마을이 화면 전체를 채우고, HUD는 가장자리에만 얹는다. 빈 곳을 누르면 마을이 눌린다.
+  // 구성은 원작을 따른다: 위에 역할 패·시계·메뉴, 아래에 대화·행동·내 패.
+  const colorOf = Object.fromEntries(players.map((p, i) => [p.name, COLORS[i % COLORS.length]]));
+  return (
+    <div className="fixed inset-0 z-10">
+      <Village
+        seats={seats}
+        scene={phase}
+        going={night ? (me.act?.target ?? me.act?.extra ?? null) : null}
+        positions={positions}
+        onPick={pickSeat}
+        onMove={(x, z) => send({ t: "move", x, z })}
+      />
+      <div className="pointer-events-none absolute inset-0 flex flex-col justify-between gap-3 p-3">
+        <div className="grid grid-cols-[1fr_auto_1fr] items-start gap-3">
+          <div>
+            {view.roster.length > 0 && (
+              <ul aria-label="이번 판의 역할" className="hud-glass pointer-events-auto inline-flex max-w-full flex-wrap gap-1 p-1.5">
+                {view.roster.map((r, i) => (
+                  <li key={i}>
+                    <RoleTile role={r} />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <div className="flex flex-col items-center gap-2">
+            <div className="hud-glass hud-display flex items-center gap-2.5 px-4 py-1 text-3xl leading-none">
+              {playing && due !== null && <Countdown due={due} />}
+              {playing && <span className={night ? "hud-moon" : "hud-sun"} aria-hidden />}
+              <span className="text-lg">{title}</span>
+            </div>
+            {phase !== "lobby" && view.news.length > 0 && (
+              <section key={phaseKey} aria-live="polite" className="hud-sign pointer-events-auto max-w-xl px-4 py-2 text-center">
+                {view.news.map((line, i) => (
+                  <p key={i} className="hud-display text-lg leading-snug">
+                    {line}
+                  </p>
+                ))}
+              </section>
+            )}
+          </div>
+
+          <div className="pointer-events-auto flex items-center justify-end gap-2">
+            <span className="hud-glass hud-display px-3 py-1.5">방 {view.code}</span>
+            <button className="hud-btn" onClick={() => setAsList(true)}>
+              목록
+            </button>
+            <button className="hud-btn" onClick={leave}>
+              나가기
+            </button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-3">
+          <div className="pointer-events-auto w-80 max-w-full">
+            <Chat view={view} send={send} colors={colorOf} hud />
+          </div>
+
+          <div className="pointer-events-auto flex max-w-2xl flex-col items-center gap-2">
+            {prompt && (
+              <p className="hud-chip hud-display px-3 py-1 text-center text-base">
+                {prompt}
+                {idle}
+              </p>
+            )}
+            {phase === "lobby" && <SetupBoard view={view} isHost={isHost} send={send} />}
+            {nightModes}
+            <div className="hud-shadow">{controlsRow}</div>
+          </div>
+
+          <div className="flex justify-end">
+            <aside className="hud-glass pointer-events-auto w-64 max-w-full p-2.5">
+              {role && me.role ? (
+                <>
+                  <div className="flex items-center gap-2.5">
+                    <RoleTile role={me.role} big />
+                    <div>
+                      <p className="hud-display text-xl leading-tight">{role.name}</p>
+                      <p className="text-xs">
+                        {TEAM_NAME[me.team]} 편{me.uses !== null && `, 능력 ${me.uses}회 남음`}
+                      </p>
+                    </div>
+                  </div>
+                  <p className="mt-2 text-xs leading-5">{role.desc}</p>
+                </>
+              ) : (
+                <p className="hud-display">{phase === "lobby" ? "친구들을 기다리는 중" : "역할은 선거 뒤에 정해집니다"}</p>
+              )}
+              {me.notes.length > 0 && (
+                <details open className="mt-2 border-t border-[var(--parchment)]/30 pt-2">
+                  <summary className="hud-display cursor-pointer text-sm">나만 아는 것 {me.notes.length}</summary>
+                  <ol className="mt-1 flex max-h-28 flex-col gap-1 overflow-y-auto text-xs leading-5">
+                    {me.notes.map((line, i) => (
+                      <li key={i}>{line}</li>
+                    ))}
+                  </ol>
+                </details>
+              )}
+              <details className="mt-2 border-t border-[var(--parchment)]/30 pt-2">
+                <summary className="hud-display cursor-pointer text-sm">조작법</summary>
+                <p className="mt-1 text-xs leading-5">
+                  WASD나 방향키로 걷고, 집이나 사람을 눌러 고릅니다. 오른쪽 버튼을 끌면 시점이 돌고 휠로 당겨 봅니다.
+                </p>
+              </details>
+            </aside>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 역할 패. public/roles/<역할 id>.png 그림이 있으면 그것을, 없으면 한 글자를 보여 준다.
+function RoleTile({ role, big = false }: { role: Slot["role"]; big?: boolean }) {
+  const [missing, setMissing] = useState(false);
+  const info = role === "insane" ? INSANE : ROLES[role];
+  return (
+    <span
+      className={`hud-tile overflow-hidden ${missing ? "" : "hud-tile-img"} ${big ? "!h-12 !w-12 !text-2xl" : ""}`}
+      title={`${info.name}: ${info.desc}`}
+    >
+      {missing ? (
+        ROLE_MARK[role]
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={`/roles/${role}.png`} alt={info.name} className="h-full w-full object-cover" onError={() => setMissing(true)} />
+      )}
+    </span>
+  );
+}
+
+const TEAM_COLOR: Record<Team, string> = { innocent: "#46a758", imposter: "#d9443a", neutral: "#0090ff" };
+
+// 대기실의 판 짜기. 방장은 이번 판에 넣을 역할과 시간을 고르고, 나머지는 지켜본다.
+function SetupBoard({ view, isHost, send }: { view: View; isHost: boolean; send: (m: object) => void }) {
+  const { setup } = view;
+  const people = view.players.length;
+  const change = (next: Partial<View["setup"]>) => send({ t: "setup", ...setup, ...next });
+  const count = (team: Team) => setup.slots.filter((s) => s.team === team).length;
+
+  return (
+    <section className="hud-glass w-full max-w-2xl p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="hud-display text-xl">이번 판에 넣을 역할</h2>
+        {isHost ? (
+          <div className="flex gap-2">
+            <button className="hud-btn" aria-pressed={setup.auto} onClick={() => change({ auto: true })}>
+              알아서 뽑기
+            </button>
+            <button className="hud-btn" aria-pressed={!setup.auto} onClick={() => change({ auto: false })}>
+              직접 고르기
+            </button>
+          </div>
+        ) : (
+          <span className="text-sm">방장이 정합니다</span>
         )}
       </div>
 
-      <Chat view={view} send={send} />
-
-      {me.notes.length > 0 && (
-        <section>
-          <h2 className="mb-1 text-sm font-medium text-zinc-400">나만 보는 결과</h2>
-          <ol className="flex flex-col gap-1 rounded-lg bg-zinc-900 px-3 py-2 text-sm">
-            {me.notes.map((line, i) => (
-              <li key={i}>{line}</li>
+      {setup.auto ? (
+        <p className="mt-2 text-sm">인원수에 맞춰 무작위로 뽑습니다.</p>
+      ) : (
+        <>
+          <ul className="mt-3 flex min-h-10 flex-wrap gap-1.5">
+            {setup.slots.map((slot, i) => (
+              <li key={i}>
+                <button
+                  disabled={!isHost}
+                  aria-label={`${slot.role === "insane" ? INSANE.name : ROLES[slot.role].name} 빼기`}
+                  onClick={() => change({ slots: setup.slots.filter((_, j) => j !== i) })}
+                  className="block rounded-lg border-b-4 pb-0.5 disabled:cursor-default"
+                  style={{ borderColor: TEAM_COLOR[slot.team] }}
+                >
+                  <RoleTile role={slot.role} />
+                </button>
+              </li>
             ))}
-          </ol>
-        </section>
+          </ul>
+          <p className="mt-1 text-sm">
+            역할 {setup.slots.length}개 (시민 {count("innocent")}, 임포스터 {count("imposter")}, 중립 {count("neutral")}), 지금 {people}명.
+            {setup.slots.length !== people && " 수가 같아야 시작할 수 있어요."}
+          </p>
+          {isHost &&
+            (Object.keys(POOL) as Team[]).map((team) => (
+              <div key={team} className="mt-2 flex items-center gap-2">
+                <span className="hud-display w-20 shrink-0 border-b-4 text-sm" style={{ borderColor: TEAM_COLOR[team] }}>
+                  {TEAM_NAME[team]}
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {POOL[team].map((role) => (
+                    <button
+                      key={role}
+                      disabled={setup.slots.length >= MAX_PLAYERS}
+                      aria-label={`${role === "insane" ? INSANE.name : ROLES[role].name} 넣기`}
+                      onClick={() => change({ slots: [...setup.slots, { role, team }] })}
+                      className="disabled:opacity-40"
+                    >
+                      <RoleTile role={role} />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+        </>
       )}
-    </>
+
+      <div className="mt-3 flex flex-wrap items-center gap-4 text-sm">
+        {(["night", "day"] as const).map((key) => (
+          <label key={key} className="flex items-center gap-2">
+            {key === "night" ? "밤 시간" : "낮 시간"}
+            <select
+              className="hud-field py-1"
+              disabled={!isHost}
+              value={setup[key]}
+              onChange={(e) => change({ [key]: Number(e.target.value) })}
+            >
+              {(key === "night" ? NIGHT_CHOICES : DAY_CHOICES).map((sec) => (
+                <option key={sec} value={sec}>
+                  {sec}초
+                </option>
+              ))}
+            </select>
+          </label>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -419,15 +730,18 @@ function Countdown({ due }: { due: number }) {
     const timer = setInterval(() => setNow(Date.now()), 500);
     return () => clearInterval(timer);
   }, []);
-  const s = Math.max(0, Math.ceil((due - now) / 1000));
+  const left = Math.max(0, Math.ceil((due - now) / 1000));
   return (
-    <span className={`ml-3 font-mono text-lg ${s <= 10 ? "text-red-400" : "text-zinc-400"}`}>
-      {Math.floor(s / 60)}:{String(s % 60).padStart(2, "0")}
+    <span className={`tabular-nums ${left <= 10 ? "text-[var(--blood)]" : ""}`}>
+      {Math.floor(left / 60)}:{String(left % 60).padStart(2, "0")}
     </span>
   );
 }
 
-function Chat({ view, send }: { view: View; send: (m: object) => void }) {
+type ChatProps = { view: View; send: (m: object) => void; colors?: Record<string, string>; hud?: boolean };
+
+// hud: 마을 위에 얹는 모양 (말풍선이 풀밭 위에 쌓인다)
+function Chat({ view, send, colors = {}, hud = false }: ChatProps) {
   const list = useRef<HTMLOListElement>(null);
   useEffect(() => {
     if (list.current) list.current.scrollTop = list.current.scrollHeight;
@@ -437,38 +751,37 @@ function Chat({ view, send }: { view: View; send: (m: object) => void }) {
   const playing = phase === "night" || phase === "day";
   const dead = playing && !me.alive;
   const blocked = phase === "night" && me.alive && me.team !== "imposter";
-  const hint = blocked
-    ? "밤에는 대화할 수 없어요"
-    : dead
-      ? me.will && phase === "day"
-        ? "유언 한마디 (모두에게 보이고, 한 번뿐입니다)"
-        : "죽은 사람끼리만 보여요"
-      : phase === "night"
-        ? me.both
-          ? "혼자 남았습니다. 죽은 동료만 볼 수 있어요"
-          : "임포스터 편끼리만 보여요"
-        : "메시지 입력";
   const willing = dead && me.will && phase === "day";
+  const hint = blocked
+    ? "밤에는 말할 수 없어요"
+    : willing
+      ? "유언 한마디 (모두에게 보이고, 한 번뿐)"
+      : dead
+        ? "죽은 사람끼리만 보여요"
+        : phase === "night"
+          ? me.both
+            ? "혼자 남았어요. 죽은 동료만 봅니다"
+            : "임포스터끼리만 보여요"
+          : "할 말을 적으세요";
 
   return (
-    <section>
-      <h2 className="mb-1 text-sm font-medium text-zinc-400">대화와 기록</h2>
+    <section className={hud ? "hud-glass p-2" : ""}>
+      {!hud && <h2 className="hud-display mb-1 text-sm">대화와 기록</h2>}
       <ol
         ref={list}
         aria-live="polite"
-        className="flex h-64 flex-col gap-1 overflow-y-auto rounded-lg bg-zinc-900 px-3 py-2 text-sm"
+        className={`flex flex-col items-start gap-1 overflow-y-auto text-sm ${hud ? "max-h-44" : "hud-glass h-64 p-2"}`}
       >
         {view.chat.map((c, i) =>
           c.name === "" ? (
-            <li key={i} className="py-1 text-center text-xs text-amber-200/80">
+            <li key={i} className="hud-shadow w-full px-1 text-xs leading-5">
               {c.text}
             </li>
           ) : (
-            <li key={i}>
-              <b className="mr-2 text-indigo-300">{c.name}</b>
-              {c.to !== "all" && (
-                <span className="mr-2 text-xs text-zinc-500">{c.to === "dead" ? "사망자끼리" : "임포스터끼리"}</span>
-              )}
+            <li key={i} className="hud-chip max-w-full break-words">
+              <span aria-hidden className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full border border-[var(--ink)]" style={{ background: colors[c.name] ?? "#8b8d98" }} />
+              <b className="hud-display mr-1.5 font-normal">{c.name}</b>
+              {c.to !== "all" && <span className="mr-1.5 text-xs opacity-70">{c.to === "dead" ? "저승에서" : "임포스터끼리"}</span>}
               {c.text}
             </li>
           ),
@@ -483,15 +796,7 @@ function Chat({ view, send }: { view: View; send: (m: object) => void }) {
           input.value = "";
         }}
       >
-        <input
-          name="text"
-          aria-label="메시지"
-          maxLength={200}
-          disabled={blocked}
-          placeholder={hint}
-          autoComplete="off"
-          className="min-w-0 flex-1 rounded-lg bg-zinc-800 px-3 py-2 disabled:opacity-50"
-        />
+        <input name="text" aria-label="메시지" maxLength={200} disabled={blocked} placeholder={hint} autoComplete="off" className="hud-field min-w-0 flex-1 text-sm" />
         <button className={willing ? btn : subBtn} disabled={blocked}>
           {willing ? "유언 남기기" : "보내기"}
         </button>
