@@ -29,9 +29,10 @@ function schedule(room: G.Room) {
   timers.delete(room);
   // TIMER_SCALE: 시뮬레이션처럼 천천히 진행해야 할 때 제한 시간을 늘린다
   const scale = Number(process.env.TIMER_SCALE) || 1;
+  const { night, day } = room.setup;
   const ms =
     scale *
-    (room.phase === "night" ? G.NIGHT_MS : room.phase !== "day" ? 0 : room.day === 0 ? G.ELECTION_MS : G.DAY_MS);
+    (room.phase === "night" ? night * 1000 : room.phase !== "day" ? 0 : room.day === 0 ? G.ELECTION_MS : day * 1000);
   room.deadline = ms ? Date.now() + ms : null;
   if (!ms) return;
   const timer = setTimeout(() => {
@@ -97,7 +98,10 @@ function onMessage(ws: WebSocket, m: Record<string, unknown>): string | void {
     case "start":
       if (!isHost) return "방장만 시작할 수 있어요";
       if (room.phase !== "lobby") return "이미 시작했어요";
-      if (room.players.length < G.MIN_PLAYERS) return `최소 ${G.MIN_PLAYERS}명이 필요해요`;
+      {
+        const err = G.canStart(room);
+        if (err) return err;
+      }
       G.start(room);
       schedule(room);
       break;
@@ -115,6 +119,24 @@ function onMessage(ws: WebSocket, m: Record<string, unknown>): string | void {
       const err = G.say(room, player, String(m.text ?? ""));
       if (err) return err;
       break;
+    }
+    case "setup": {
+      if (!isHost) return "방장만 바꿀 수 있어요";
+      const err = G.configure(room, m.auto, m.slots, m.night, m.day);
+      if (err) return err;
+      break;
+    }
+    case "move": {
+      // 마을에서 걸어다니는 위치를 같은 방 사람들에게 전한다. 규칙과 무관한 연출이라 저장하지 않는다.
+      // 밤의 이동과 죽은 사람의 위치는 비밀이므로 전하지 않는다.
+      const x = Number(m.x);
+      const z = Number(m.z);
+      const secret = room.phase === "night" || (room.phase === "day" && !player.alive);
+      if (secret || !Number.isFinite(x) || !Number.isFinite(z)) return;
+      const clamp = (n: number) => Math.max(-40, Math.min(40, n));
+      const msg = JSON.stringify({ t: "pos", id: player.id, x: clamp(x), z: clamp(z) });
+      for (const [other, o] of sockets) if (o.room === room && other !== ws) other.send(msg);
+      return;
     }
     case "next": // 자리 비운 사람을 기다리지 않고 넘기기
       if (!isHost) return "방장만 넘길 수 있어요";
