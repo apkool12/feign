@@ -1,6 +1,6 @@
 // 실행: npm test
 import assert from "node:assert/strict";
-import { act, advance, deal, newPlayer, newRoom, pick, say, SKIP, start, view } from "./game.ts";
+import { act, advance, canStart, configure, deal, newPlayer, newRoom, pick, say, SKIP, start, view } from "./game.ts";
 import type { Player, Role, Room, Team } from "./game.ts";
 
 const NEUTRAL = ["survivor", "serialKiller", "bomber", "thief", "sorcerer", "haunter"];
@@ -12,7 +12,7 @@ function seq() {
   return () => (k = (k + 0.37) % 1);
 }
 
-// "doctor" = 시민, "imp:blocker" = 임포스터, "mad:lookout" = 광인, 중립 역할은 자동으로 중립. 1일차 밤에서 시작.
+// "doctor" = 시민, "imp:blocker" = 임포스터, "mad:lookout" = 정신병자, 중립 역할은 자동으로 중립. 1일차 밤에서 시작.
 function room(...specs: string[]): Room {
   const r = newRoom("TEST");
   r.players = specs.map((spec, i) => {
@@ -45,7 +45,7 @@ function day(r: Room, map: Record<number, string>) {
 }
 const notes = (p: Player) => p.notes.join("\n");
 
-// 역할 배분: 인원수와 맞고, 임포스터가 과반이 아니고, 의사가 있고, 6명부터 광인이 한 명
+// 역할 배분: 인원수와 맞고, 임포스터가 과반이 아니고, 의사가 있고, 5명부터 정신병자가 한 명
 for (let n = 4; n <= 10; n++) {
   const hands = deal(n, seq());
   assert.equal(hands.length, n);
@@ -55,7 +55,7 @@ for (let n = 4; n <= 10; n++) {
   assert.ok(hands.every((h) => !h.insane || h.team === "innocent"));
 }
 
-// view: 남의 역할과 토큰이 새지 않고, 광인은 자기 정체를 모르고, 임포스터끼리는 서로를 안다
+// view: 남의 역할과 토큰이 새지 않고, 정신병자는 자기 정체를 모르고, 임포스터끼리는 서로를 안다
 {
   const r = room("doctor", "doctor", "doctor", "doctor", "doctor", "doctor", "doctor");
   start(r);
@@ -73,7 +73,7 @@ for (let n = 4; n <= 10; n++) {
   const mad = r.players.find((p) => p.insane)!;
   const v = view(r, mad);
   assert.ok(!JSON.stringify(v).includes("secret"));
-  assert.ok(!JSON.stringify(v).includes("광인"));
+  assert.ok(!JSON.stringify(v).includes("정신병자"));
   assert.equal(v.players.filter((p) => p.label !== null).length, 1);
   const imp = r.players.find((p) => p.team === "imposter")!;
   assert.equal(view(r, imp).players.filter((p) => p.label !== null).length, 2);
@@ -299,7 +299,7 @@ for (let n = 4; n <= 10; n++) {
   assert.deepEqual(r.players.map((p) => p.won), [true, true, false, false]);
 }
 
-// 광인의 능력은 전부 가짜지만 본인에게는 그럴듯한 결과가 온다
+// 정신병자의 능력은 전부 가짜지만 본인에게는 그럴듯한 결과가 온다
 {
   const r = room("imp:cleaner", "mad:doctor", "mad:blocker", "lookout");
   night(r, { 0: "kill p3", 1: "ability p3", 2: "ability p0" });
@@ -307,7 +307,7 @@ for (let n = 4; n <= 10; n++) {
   assert.equal(r.players[3].reveal, "감시자(시민)");
   assert.match(notes(r.players[2]), /P0 님은 외출을 시도/);
   day(r, { 0: "p1", 2: "p1" });
-  assert.equal(r.players[1].reveal, "광인(시민)"); // 죽어야 광인임이 드러난다
+  assert.equal(r.players[1].reveal, "정신병자(시민)"); // 죽어야 정신병자임이 드러난다
   assert.equal(r.winner, "imposter");
 }
 
@@ -327,6 +327,33 @@ for (let n = 4; n <= 10; n++) {
   assert.deepEqual(seen(dead), ["범인은 P0", "좋은 아침"]);
   r.phase = "ended";
   assert.equal(seen(doc).length, 3);
+}
+
+// 방장이 고른 역할 구성: 잘못된 값은 거부하고, 고른 그대로 나눠 준다
+{
+  const r = newRoom("SET");
+  for (let i = 0; i < 5; i++) r.players.push(newPlayer(`p${i}`, `secret${i}`, `P${i}`));
+  const good = [
+    { role: "blocker", team: "imposter" },
+    { role: "doctor", team: "innocent" },
+    { role: "insane", team: "innocent" },
+    { role: "lookout", team: "innocent" },
+    { role: "bomber", team: "neutral" },
+  ];
+  assert.ok(configure(r, false, [{ role: "doctor", team: "imposter" }], 90, 180)); // 의사는 임포스터가 될 수 없다
+  assert.ok(configure(r, false, good, 7, 180)); // 고를 수 없는 시간
+  assert.equal(configure(r, false, good.slice(1), 60, 300), null);
+  assert.match(canStart(r)!, /역할은 4개인데 사람은 5명/);
+  assert.equal(configure(r, false, good.slice(1).concat(good[1]), 60, 300), null);
+  assert.match(canStart(r)!, /임포스터가 한 명은/);
+  assert.equal(configure(r, false, good, 60, 300), null);
+  assert.equal(canStart(r), null);
+  start(r);
+  advance(r, seq());
+  assert.deepEqual(r.players.map((p) => p.team).sort(), ["imposter", "innocent", "innocent", "innocent", "neutral"]);
+  assert.equal(r.players.filter((p) => p.insane).length, 1);
+  assert.ok(r.roster.includes("blocker") && r.roster.includes("bomber"));
+  assert.ok(configure(r, true, [], 90, 180)); // 시작한 뒤에는 못 바꾼다
 }
 
 // 무작위로 수백 판을 돌려도 오류 없이 끝나고, 살아 있는 남의 역할은 임포스터끼리만 보인다

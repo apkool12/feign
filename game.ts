@@ -30,8 +30,9 @@ export const SKIP = "skip";
 export const MIN_PLAYERS = 4;
 export const MAX_PLAYERS = 10;
 export const ELECTION_MS = 60_000;
-export const NIGHT_MS = 90_000;
-export const DAY_MS = 180_000;
+// 방장이 고를 수 있는 밤·낮 제한 시간(초)
+export const NIGHT_CHOICES = [45, 60, 90, 120];
+export const DAY_CHOICES = [120, 180, 300];
 const MAYOR_BONUS = 1; // 시장의 추가 표, 0.1표 단위 (표 계산은 전부 0.1표 단위 정수로 한다)
 
 // action: 밤에 능력을 쓸 때 버튼에 적는 말
@@ -106,12 +107,30 @@ export const ROLES: Record<Role, { name: string; action: string; desc: string }>
   },
 };
 export const TEAM_NAME: Record<Team, string> = { innocent: "시민", imposter: "임포스터", neutral: "중립" };
+export const INSANE = { name: "정신병자", desc: "자신이 다른 시민 역할이라고 믿지만 능력은 전부 가짜입니다." };
 
 // 시민과 임포스터 양쪽에 나올 수 있는 역할
 const COMMON: Role[] = ["blocker", "lookout", "investigator", "trapper", "snitch", "provoker", "tracker"];
 const IMPOSTER_ONLY: Role[] = ["cleaner", "blamer"];
 const NEUTRAL: Role[] = ["survivor", "serialKiller", "bomber", "thief", "sorcerer", "haunter"];
 const INNOCENT: Role[] = ["doctor", ...COMMON];
+// 진영별로 넣을 수 있는 역할. 정신병자는 역할이 아니라 "가짜 능력을 가진 시민"이지만 판을 짤 때는 한 칸을 차지한다.
+export type Slot = { role: Role | "insane"; team: Team };
+export const POOL: Record<Team, Slot["role"][]> = {
+  innocent: ["doctor", "insane", ...COMMON],
+  imposter: [...IMPOSTER_ONLY, ...COMMON],
+  neutral: NEUTRAL,
+};
+const teamsOf = (role: Slot["role"]) => (Object.keys(POOL) as Team[]).filter((team) => POOL[team].includes(role));
+
+// 방장이 대기실에서 정하는 판 설정
+export interface Setup {
+  auto: boolean; // 인원수에 맞춰 알아서 뽑는다
+  slots: Slot[]; // 직접 고른 역할들 (auto가 아닐 때 쓴다)
+  night: number; // 밤 제한 시간(초)
+  day: number;
+}
+
 const USES: Partial<Record<Role, number>> = { snitch: 1, provoker: 2, survivor: 3 }; // 횟수 제한
 const KILLERS: Role[] = ["serialKiller", "bomber", "sorcerer", "thief"]; // 살아 있으면 게임이 안 끝나는 중립
 const UNSEEN: Role[] = ["serialKiller", "sorcerer"]; // 막히지 않고 감시에도 보이지 않는다
@@ -129,9 +148,9 @@ export interface Player {
   name: string;
   connected: boolean;
   alive: boolean;
-  role: Role; // 광인이면 본인이 믿는 역할
+  role: Role; // 정신병자면 본인이 믿는 역할
   team: Team;
-  insane: boolean; // 광인: 능력이 전부 가짜인 시민. 본인은 모른다
+  insane: boolean; // 정신병자: 능력이 전부 가짜인 시민. 본인은 모른다
   uses: number | null; // 남은 능력 횟수 (제한 없으면 null)
   act: Act | null; // 오늘 밤 행동
   pick: string | null; // 낮 투표 대상
@@ -155,7 +174,9 @@ export interface Room {
   phase: Phase;
   day: number; // 0일차 낮은 시장 선거
   players: Player[];
+  setup: Setup;
   mayor: string | null;
+  roster: Role[]; // 이번 판에 들어간 역할들 (누가 무엇인지는 알 수 없게 정렬해 둔다)
   log: string[];
   news: string[]; // log 중 방금 정산에서 생긴 것
   chat: { name: string; text: string; to: Channel }[]; // name이 ""이면 시스템 안내
@@ -170,7 +191,9 @@ export function newRoom(code: string): Room {
     phase: "lobby",
     day: 0,
     players: [],
+    setup: { auto: true, slots: [], night: 90, day: 180 },
     mayor: null,
+    roster: [],
     log: [],
     news: [],
     chat: [],
@@ -225,7 +248,7 @@ function shuffle<T>(a: T[], rng: Rng): T[] {
   return a;
 }
 
-// 인원수에 맞춰 역할을 뽑는다. 임포스터 1~2명, 5명부터 광인 1명, 6명부터 중립 1명, 9명부터 중립 2명.
+// 인원수에 맞춰 역할을 뽑는다. 임포스터 1~2명, 5명부터 정신병자 1명, 6명부터 중립 1명, 9명부터 중립 2명.
 // ponytail: 구성은 자동. 방장이 직업을 고르는 설정은 필요해지면 추가.
 export function deal(n: number, rng: Rng = Math.random): { role: Role; team: Team; insane: boolean }[] {
   const imposters = n >= 7 ? 2 : 1;
@@ -248,6 +271,43 @@ export function deal(n: number, rng: Rng = Math.random): { role: Role; team: Tea
   return shuffle(out, rng);
 }
 
+// 방장이 고른 역할들을 나눠 준다. 정신병자는 무작위 시민 역할을 받은 줄 안다.
+function dealSlots(slots: Slot[], rng: Rng) {
+  const hands = slots.map((s) =>
+    s.role === "insane"
+      ? { role: INNOCENT[Math.floor(rng() * INNOCENT.length)], team: "innocent" as Team, insane: true }
+      : { role: s.role, team: s.team, insane: false },
+  );
+  return shuffle(hands, rng);
+}
+
+// 판 설정을 바꾼다. 받은 값은 믿지 않고 하나씩 확인한다. 실패하면 사유를 돌려준다.
+export function configure(room: Room, auto: unknown, slots: unknown, night: unknown, day: unknown): string | null {
+  if (room.phase !== "lobby") return "대기실에서만 바꿀 수 있어요";
+  if (!Array.isArray(slots) || slots.length > MAX_PLAYERS) return "역할은 열 개까지 넣을 수 있어요";
+  const clean: Slot[] = [];
+  for (const s of slots) {
+    const role = s?.role as Slot["role"];
+    const team = s?.team as Team;
+    if (!teamsOf(role).includes(team)) return "넣을 수 없는 역할이에요";
+    clean.push({ role, team });
+  }
+  if (!NIGHT_CHOICES.includes(night as number) || !DAY_CHOICES.includes(day as number)) return "고를 수 없는 시간이에요";
+  room.setup = { auto: auto !== false, slots: clean, night: night as number, day: day as number };
+  return null;
+}
+
+// 지금 설정으로 시작할 수 있는가. 안 되면 사유를 돌려준다.
+export function canStart(room: Room): string | null {
+  const n = room.players.length;
+  if (n < MIN_PLAYERS) return `최소 ${MIN_PLAYERS}명이 필요해요`;
+  const { auto, slots } = room.setup;
+  if (auto) return null;
+  if (slots.length !== n) return `역할은 ${slots.length}개인데 사람은 ${n}명이에요. 수를 맞춰 주세요`;
+  if (!slots.some((s) => s.team === "imposter")) return "임포스터가 한 명은 있어야 해요";
+  return null;
+}
+
 // 기록에 남기고 대화 흐름에도 안내로 끼워 넣는다
 function announce(room: Room, line: string) {
   room.log.push(line);
@@ -259,6 +319,7 @@ export function start(room: Room) {
   for (const p of room.players) Object.assign(p, newPlayer(p.id, p.token, p.name), { connected: p.connected });
   room.day = 0;
   room.mayor = null;
+  room.roster = [];
   room.log = [];
   room.news = [];
   room.winner = null;
@@ -365,7 +426,7 @@ function tops(count: Map<string, number>): string[] {
 
 const tag = (role: Role, team: Team) => `${ROLES[role].name}(${TEAM_NAME[team]})`;
 // 본인도 모르는 것까지 포함한 진짜 정체
-const truth = (p: Player) => `${p.insane ? "광인·" : ""}${tag(p.role, p.team)}${p.stole ? "·원래 도둑" : ""}`;
+const truth = (p: Player) => `${p.insane ? "정신병자·" : ""}${tag(p.role, p.team)}${p.stole ? "·원래 도둑" : ""}`;
 
 function die(p: Player, hidden = false) {
   p.alive = false;
@@ -375,7 +436,7 @@ function die(p: Player, hidden = false) {
       : p.blamed
         ? tag(p.blamed, "imposter")
         : p.insane
-          ? `광인(${TEAM_NAME.innocent})`
+          ? `정신병자(${TEAM_NAME.innocent})`
           : tag(p.role, p.team);
 }
 
@@ -399,11 +460,11 @@ function resolveNight(room: Room, rng: Rng) {
 
   const stopped = new Set<Player>(); // 막히거나 덫에 걸려 행동이 무효가 된 사람
   const hits: { victim: Player; kind: "curse" | "sk" | "bomb" | "kill" | "thief" | "haunt" }[] = [];
-  // 광인은 실제로 움직이지 않는다 (의사인 줄 아는 광인만 예외로 찾아간다)
+  // 정신병자는 실제로 움직이지 않는다 (의사인 줄 아는 정신병자만 예외로 찾아간다)
   const visiting = (p: Player) => !stopped.has(p) && goes(p).length > 0 && (!p.insane || p.role === "doctor");
   const visitors = (house: Player, except: Player) =>
     alive.filter((q) => q !== except && visiting(q) && goes(q).includes(house.id) && !UNSEEN.includes(q.role));
-  // 광인에게 줄 그럴듯한 가짜 이름 (없을 수도 있다)
+  // 정신병자에게 줄 그럴듯한 가짜 이름 (없을 수도 있다)
   const someone = (...not: Player[]) => {
     const others = alive.filter((q) => !not.includes(q));
     return others.length && rng() < 0.5 ? oneOf(others) : null;
@@ -455,7 +516,7 @@ function resolveNight(room: Room, rng: Rng) {
     note(p, `${t.name} 님 집 앞의 덫에 ${sprung ? "누군가 걸렸습니다" : "아무도 걸리지 않았습니다"}.`);
   }
 
-  // 여기서부터는 막힌 사람과 광인의 능력이 발동하지 않는다
+  // 여기서부터는 막힌 사람과 정신병자의 능력이 발동하지 않는다
   const works = (p: Player) => !stopped.has(p) && !p.insane;
 
   for (const p of users("haunter")) if (works(p)) p.mark = target(p).id;
@@ -520,7 +581,7 @@ function resolveNight(room: Room, rng: Rng) {
   for (const p of users("doctor")) {
     if (stopped.has(p)) continue;
     const t = target(p);
-    // 광인은 아무도 죽지 않은 밤이면 자기가 살렸다고 믿는다
+    // 정신병자는 아무도 죽지 않은 밤이면 자기가 살렸다고 믿는다
     const believes = p.insane ? dying.size === 0 : attacked.has(t) && !dying.has(t);
     if (believes) note(p, `${t.name} 님을 공격에서 지켜냈습니다.`);
   }
@@ -533,14 +594,6 @@ function resolveNight(room: Room, rng: Rng) {
     note(target(p), "누군가 집 앞에서 확성기로 떠들었습니다.");
   }
 
-  const teamsOf = (role: Role): Team[] =>
-    role === "doctor"
-      ? ["innocent"]
-      : COMMON.includes(role)
-        ? ["innocent", "imposter"]
-        : IMPOSTER_ONLY.includes(role)
-          ? ["imposter"]
-          : ["neutral"];
   const fake = (not: string): string => {
     for (;;) {
       const role = oneOf(Object.keys(ROLES) as Role[]);
@@ -695,8 +748,10 @@ export function advance(room: Room, rng: Rng = Math.random) {
   } else {
     resolveDay(room, rng);
     if (room.day === 0) {
-      const hands = deal(room.players.length, rng);
+      const hands = room.setup.auto ? deal(room.players.length, rng) : dealSlots(room.setup.slots, rng);
       room.players.forEach((p, i) => assign(p, hands[i].role, hands[i].team, hands[i].insane));
+      const order = Object.keys(ROLES);
+      room.roster = hands.map((h) => h.role).sort((a, b) => order.indexOf(a) - order.indexOf(b));
       announce(room, "역할이 정해졌습니다. 자신의 역할을 확인하세요.");
     }
     for (const p of room.players) p.will = false; // 유언은 죽은 다음 낮에만 남길 수 있다
@@ -726,7 +781,7 @@ export function view(room: Room, me: Player, now = Date.now()) {
     if (unknown) return null;
     if (room.phase === "ended" || spoiled) return truth(p); // 끝났거나 내가 죽었으면 전부 보인다
     if (!p.alive) return ally(p) ? truth(p) : p.reveal; // 같은 편의 정체는 가려져도 안다
-    if (p === me) return tag(me.role, me.team); // 광인은 자기가 광인인 줄 모른다
+    if (p === me) return tag(me.role, me.team); // 정신병자는 자기가 정신병자인 줄 모른다
     return ally(p) ? truth(p) : null;
   };
   const doing = (p: Player): string | null => {
@@ -742,6 +797,8 @@ export function view(room: Room, me: Player, now = Date.now()) {
     day: room.day,
     winner: room.winner,
     result: room.result,
+    roster: room.roster,
+    setup: room.setup,
     remaining: room.deadline === null ? null : Math.max(0, room.deadline - now),
     pending: playing ? pending(room).length : 0,
     news: [...room.news, ...me.news],
