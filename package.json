@@ -2,21 +2,25 @@
   "name": "fegin",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "next dev",
+    "dev": "node --experimental-strip-types --disable-warning=ExperimentalWarning server.ts",
     "build": "next build",
-    "start": "next start"
+    "start": "NODE_ENV=production node --experimental-strip-types --disable-warning=ExperimentalWarning server.ts",
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning game.test.ts"
   },
   "dependencies": {
     "next": "16.4.0",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/ws": "^8.18.2",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
