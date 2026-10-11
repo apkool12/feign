@@ -457,6 +457,7 @@ function useWater(extra: Record<string, number> = {}) {
   }, []);
   return { ref, uniforms };
 }
+const SPLASH = new THREE.MeshBasicMaterial({ color: "#ffffff", toneMapped: false }); // 폭포 밑의 거품과 물방울
 const CALM = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const VERTEX = "varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }";
 // 손그림 화풍에 맞춘 물: 끊어 칠한 서너 가지 색과 흰 선만 쓴다 (꿈틀대는 노이즈 무늬는 쓰지 않는다)
@@ -467,7 +468,7 @@ const TOON = `
   const vec3 SHALLOW = vec3(0.63, 0.88, 0.94);
   const vec3 FOAM = vec3(0.97, 0.99, 1.0);
   float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-  vec3 dusk(vec3 c) { return mix(c, c * vec3(0.05, 0.09, 0.24), uNight * 0.96); } // 밤에는 주변 땅보다 어두운 남청, 거품은 달빛만큼만
+  vec3 dusk(vec3 c) { return mix(c, (0.55 + 0.45 * c) * vec3(0.022, 0.045, 0.13), uNight * 0.96); } // 밤에는 주변 땅보다 어두운 남청. 흰 거품도 물색에서 조금만 밝다
   // 경계가 계단지지 않게 한 픽셀 폭으로만 풀어 주는 step
   float cut(float edge, float x) { float w = fwidth(x); return smoothstep(edge - w, edge + w, x); }
   // 붓으로 그은 듯한 길쭉한 흰 줄. 칸(p의 정수부)마다 keep 확률로 하나씩, p.y 방향으로 길고 양끝이 가늘다.
@@ -647,6 +648,7 @@ function Waterfall({ p }: { p: Plan }) {
   }, [p]);
   useFrame((state) => {
     const t = state.clock.elapsedTime * (CALM ? 0.15 : 1);
+    SPLASH.color.setRGB(1 - 0.9 * sky.night, 1 - 0.84 * sky.night, 1 - 0.62 * sky.night); // 밤에는 물보라도 물색으로 가라앉는다
     // 떨어진 자리에 뭉게뭉게 이는 거품
     foam.current?.children.forEach((puff, i) => puff.scale.setScalar((0.34 + (i % 3) * 0.08) * (1 + Math.sin(t * 3 + i * 1.7) * 0.14)));
     // 통통 튀어 오르는 물방울
@@ -689,18 +691,16 @@ function Waterfall({ p }: { p: Plan }) {
       </mesh>
       <group ref={foam}>
         {[-0.62, -0.3, 0.02, 0.34, 0.64].map((x, i) => (
-          <mesh key={i} position={[x, 0.2, LANDING + (i % 2) * 0.16]}>
+          <mesh key={i} position={[x, 0.2, LANDING + (i % 2) * 0.16]} material={SPLASH}>
             <sphereGeometry args={[1, 10, 8]} />
-            <meshBasicMaterial color="#ffffff" toneMapped={false} />
           </mesh>
         ))}
       </group>
       {!CALM && (
         <group ref={spray}>
           {Array.from({ length: 8 }, (_, i) => (
-            <mesh key={i}>
+            <mesh key={i} material={SPLASH}>
               <sphereGeometry args={[1, 8, 6]} />
-              <meshBasicMaterial color="#ffffff" toneMapped={false} />
             </mesh>
           ))}
         </group>
