@@ -33,18 +33,19 @@ function tone(b: Buf, at: number, d: number, f: number, g: number, o: { to?: num
 }
 
 // 걸러 낸 잡음. band면 f 근처만, 아니면 f 아래만 남긴다.
-function noise(b: Buf, at: number, d: number, f: number, g: number, o: { to?: number; q?: number; low?: boolean; seed?: number } = {}) {
-  const { to = f, q = 0.5, low = false, seed = 1 } = o;
+function noise(b: Buf, at: number, d: number, f: number, g: number, o: { to?: number; q?: number; low?: boolean; seed?: number; a?: number } = {}) {
+  const { to = f, q = 0.5, low = false, seed = 1, a = 0.003 } = o;
   const rand = rng(seed);
   let lo = 0;
   let band = 0;
   const n = Math.min(b.length - ((at * SR) | 0), (d * SR) | 0);
   for (let i = 0; i < n; i++) {
     const t = i / SR;
-    const fc = 2 * Math.sin((Math.PI * Math.min(f * (to / f) ** (t / d), 9000)) / SR);
+    // 필터가 터지지 않는 한계(fc² + 2·q·fc < 4) 안에서만 올린다
+    const fc = Math.min(2 * Math.sin((Math.PI * Math.min(f * (to / f) ** (t / d), 9000)) / SR), 0.9 * (Math.sqrt(q * q + 4) - q));
     lo += fc * band;
     band += fc * (rand() * 2 - 1 - lo - q * band);
-    b[((at * SR) | 0) + i] += g * Math.min(1, t / 0.003) * Math.exp((-5 * t) / d) * (low ? lo : band);
+    b[((at * SR) | 0) + i] += g * Math.min(1, t / a) * Math.exp((-5 * t) / d) * (low ? lo : band);
   }
 }
 
@@ -63,6 +64,44 @@ const yawn = (b: Buf, f: number) => {
   tone(b, 0, 0.35, f * 0.75, 0.6, { to: f * 1.05, a: 0.12, tri: true });
   tone(b, 0.22, d - 0.22, f * 1.05, 1, { to: f * 0.55, a: 0.1, vib: 0.015 });
   noise(b, d * 0.55, d * 0.45, 500, 0.15, { low: true, seed: f });
+};
+// 우르릉: 낮은 잡음이 불규칙하게 출렁이며 잦아든다
+const rumble = (b: Buf, at: number, d: number, f: number, g: number, seed: number) => {
+  const tmp = new Float32Array((d * SR) | 0);
+  noise(tmp, 0, d, f, 1, { low: true, seed });
+  const rand = rng(seed + 100);
+  const [p1, p2] = [rand() * 6, rand() * 6];
+  const start = (at * SR) | 0;
+  for (let i = 0; i < tmp.length && start + i < b.length; i++) {
+    const t = i / SR;
+    b[start + i] += g * tmp[i] * (0.5 + 0.5 * Math.abs(Math.sin(2 * Math.PI * 2.3 * t + p1) * Math.sin(2 * Math.PI * 0.9 * t + p2)));
+  }
+};
+// 번개: 날카로운 크랙 + 아래로 떨어지는 붐 + 우르릉 꼬리
+const thunder = (b: Buf, seed: number, boom: number, twice = false) => {
+  const d = b.length / SR;
+  noise(b, 0, 0.06, 4500, 1, { q: 1.8, seed });
+  noise(b, 0.01, 0.14, 1500, 0.8, { q: 1.5, seed: seed + 1 });
+  if (twice) noise(b, 0.09, 0.07, 3800, 0.8, { q: 1.8, seed: seed + 2 });
+  tone(b, 0.02, 0.7, boom, 1.4, { to: boom * 0.45 });
+  rumble(b, 0.08, d - 0.08, 220, 3, seed + 3);
+};
+// 쇠붙이: 배음이 어긋난 음 셋
+const metal = (b: Buf, at: number, d: number, f: number, g = 1) =>
+  [1, 1.67, 2.7].forEach((k, i) => tone(b, at, d / (1 + i * 0.4), f * k, g / (1 + i)));
+// 잘게 흩어지는 잡음 알갱이(파편, 불꽃, 지직)
+const grains = (b: Buf, from: number, to: number, n: number, f: number, g: number, seed: number) => {
+  const rand = rng(seed);
+  for (let i = 0; i < n; i++) {
+    const t = from + (to - from) * rand();
+    noise(b, t, 0.012 + rand() * 0.03, f * (0.6 + rand()), g * (1 - (0.7 * (t - from)) / (to - from)) * (0.4 + rand() * 0.6), { q: 1.5, seed: seed + i + 1 });
+  }
+};
+// 풍선이 부푸는 고무 소리: 뿌욱 올라가다 끝에서 뽁
+const balloon = (b: Buf, f: number) => {
+  const d = b.length / SR;
+  tone(b, 0, d - 0.04, f, 1, { to: f * 2.1, tri: true, vib: 0.02, a: 0.03 });
+  tone(b, d - 0.07, 0.06, f * 2.6, 0.9, { to: f * 4 });
 };
 // 음 이름 대신 반음 수(0 = 가온 다, C5 = 12)
 const hz = (semi: number) => 261.63 * 2 ** (semi / 12);
@@ -96,6 +135,13 @@ const SOUNDS = {
   step3: [0.1, 0.26, (b) => pat(b, 405, 0.15)],
   step4: [0.09, 0.26, (b) => pat(b, 460, 0.25)],
   step5: [0.075, 0.26, (b) => pat(b, 420, 0.2)],
+  // 연출: 추방 — 풍선이 부풀고, 떠오르고, 묘비가 떨어져 박힌다
+  balloon: [0.3, 0.35, (b) => balloon(b, 260)],
+  balloon2: [0.26, 0.35, (b) => balloon(b, 300)],
+  balloon3: [0.34, 0.35, (b) => balloon(b, 230)],
+  whoosh: [0.6, 0.4, (b) => noise(b, 0, 0.9, 400, 1, { to: 3400, q: 0.9, a: 0.2, seed: 61 })],
+  whooshDown: [0.45, 0.45, (b) => noise(b, 0, 0.45, 3400, 1, { to: 300, q: 0.9, a: 0.05, seed: 62 })],
+  thud: [0.4, 0.6, (b) => (tone(b, 0, 0.3, 110, 1.3, { to: 55 }), tone(b, 0, 0.35, 70, 1, { to: 40 }), noise(b, 0, 0.08, 600, 0.6, { low: true, seed: 63 }), grains(b, 0.05, 0.3, 8, 1800, 0.25, 64))],
   // 연출: 밤이 될 때 하품, 집 문 여닫기. 여럿이 겹치므로 작게.
   yawn: [0.9, 0.25, (b) => yawn(b, 330)],
   yawn2: [0.8, 0.25, (b) => yawn(b, 392)],
@@ -106,7 +152,32 @@ const SOUNDS = {
   chat: [0.1, 0.35, (b) => tone(b, 0, 0.09, 420, 1, { to: 900 })],
   join: [0.3, 0.4, (b) => notes(b, [7, 14], 0.09, 0.2)],
   leave: [0.3, 0.35, (b) => notes(b, [14, 7], 0.09, 0.2)],
-  // 능력 (계열별)
+  // 능력 (역할별). 고르는 순간 play(역할 id), 나머지는 3D 연출이 제때 부른다.
+  doctor: [0.85, 0.5, (b) => (notes(b, [7, 12, 16], 0.1, 0.5, { h: 0.15 }), notes(b.subarray((0.36 * SR) | 0), [31, 36], 0.07, 0.4, { h: 0.1 }))],
+  blocker: [0.6, 0.5, (b) => (tone(b, 0, 0.15, 120, 1, { to: 70 }), noise(b, 0, 0.06, 500, 0.5, { low: true, seed: 2 }), tone(b, 0.2, 0.38, 2300, 0.45, { vib: 0.05, a: 0.01 }))],
+  lookout: [0.4, 0.4, (b) => (tone(b, 0, 0.1, 1500, 1, { to: 1750 }), noise(b, 0.06, 0.12, 2500, 0.2, { to: 1200, seed: 3 }), tone(b, 0.2, 0.14, 900, 1, { to: 560 }))],
+  investigator: [0.75, 0.45, (b) => (noise(b, 0, 0.26, 800, 0.7, { to: 3200, q: 0.9, seed: 4 }), tone(b, 0.3, 0.45, hz(28), 1, { h: 0.35 }))],
+  snitch: [0.55, 0.4, (b) => (noise(b, 0, 0.13, 3600, 0.8, { q: 1.5, seed: 5 }), noise(b, 0.16, 0.13, 3200, 0.8, { q: 1.5, seed: 6 }), tone(b, 0.38, 0.1, 520, 1, { to: 1150 }))],
+  provoker: [0.6, 0.5, (b) => (tone(b, 0, 0.26, 392, 1, { to: 440, tri: true, vib: 0.06, h: 0.5 }), tone(b, 0.28, 0.3, 494, 1, { to: 560, tri: true, vib: 0.06, h: 0.5 }), noise(b, 0, 0.55, 1200, 0.25, { q: 0.6, seed: 7 }))],
+  tracker: [0.75, 0.4, (b) => ([0, 0.12, 0.24].forEach((t, i) => tone(b, t, 0.06, 420 + i * 30, 0.8, { to: 260 })), tone(b, 0.42, 0.32, hz(0), 1, { h: 0.2 }))],
+  cleaner: [0.75, 0.4, (b) => (noise(b, 0, 0.17, 1500, 0.8, { to: 4000, q: 1.4, seed: 8 }), noise(b, 0.2, 0.17, 4000, 0.8, { to: 1500, q: 1.4, seed: 9 }), notes(b.subarray((0.42 * SR) | 0), [31, 36], 0.07, 0.3, { h: 0.1 }))],
+  blamer: [0.4, 0.5, (b) => (noise(b, 0, 0.2, 900, 1, { to: 250, low: true, seed: 10 }), tone(b, 0, 0.15, 300, 0.8, { to: 90 }), [0.2, 0.26, 0.31].forEach((t) => tone(b, t, 0.03, 800, 0.3, { to: 400 })))],
+  kill: [0.45, 0.55, (b) => (noise(b, 0, 0.22, 3000, 0.8, { to: 7000, q: 0.6, seed: 11 }), tone(b, 0.02, 0.2, 3200, 0.2, { to: 4200 }), tone(b, 0.28, 0.14, 130, 1, { to: 60 }), noise(b, 0.28, 0.06, 500, 0.5, { low: true, seed: 12 }))],
+  serialKiller: [0.85, 0.55, (b) => ([0, 0.26].forEach((t, i) => (noise(b, t, 0.24, 1800, 0.8, { to: 4500, q: 0.6, seed: 13 + i }), tone(b, t, 0.22, 1900, 0.15, { to: 2400 }))), tone(b, 0, 0.85, hz(-17), 0.8, { vib: 0.02, a: 0.08 }))],
+  thief: [0.7, 0.4, (b) => (notes(b, [7, 6, 4], 0.13, 0.11, { h: 0.2 }), noise(b, 0.42, 0.24, 600, 0.6, { to: 1400, q: 1.3, seed: 15 }))],
+  haunter: [1, 0.45, (b) => (noise(b, 0, 0.16, 500, 0.6, { low: true, seed: 16 }), tone(b, 0.12, 0.5, hz(7), 1, { to: hz(12), vib: 0.04, a: 0.15 }), tone(b, 0.42, 0.58, hz(12), 0.9, { to: hz(5), vib: 0.04, a: 0.1 }))],
+  survivor: [0.45, 0.5, (b) => (noise(b, 0, 0.03, 4000, 0.6, { q: 1.5, seed: 17 }), metal(b, 0, 0.26, 820), metal(b, 0.14, 0.2, 1040, 0.6))],
+  trapper: [0.45, 0.4, (b) => ([0, 0.06, 0.12, 0.18, 0.24].forEach((t, i) => tone(b, t, 0.025, 1900 + i * 120, 0.8, { h: 0.4 })), tone(b, 0, 0.4, 600, 0.3, { to: 900, tri: true, vib: 0.03 }))],
+  snap: [0.4, 0.55, (b) => (noise(b, 0, 0.02, 6000, 1, { q: 1.8, seed: 18 }), metal(b, 0, 0.24, 1900), tone(b, 0.03, 0.35, 480, 0.6, { to: 300, vib: 0.15 }))],
+  bomber: [0.3, 0.45, (b) => (tone(b, 0, 0.1, 150, 1, { to: 90 }), noise(b, 0, 0.05, 500, 0.4, { low: true, seed: 19 }), tone(b, 0.18, 0.035, 1400, 0.6, { to: 1100, h: 0.3 }))],
+  fuse: [0.6, 0.3, (b) => (noise(b, 0, 99, 5200, 0.5, { q: 1.6, seed: 20 }), grains(b, 0, 0.58, 26, 3500, 1, 21))],
+  boom: [1.1, 0.7, (b) => (tone(b, 0, 0.5, 140, 1.4, { to: 38 }), tone(b, 0, 0.6, 70, 1, { to: 30 }), noise(b, 0, 0.4, 900, 1.5, { to: 200, low: true, seed: 22 }), grains(b, 0.2, 1, 14, 2400, 0.5, 23))],
+  sorcerer: [0.5, 0.5, (b) => (tone(b, 0, 0.5, hz(-5), 1, { to: hz(7), tri: true, vib: 0.03, a: 0.15 }), tone(b, 0, 0.5, hz(1), 0.6, { to: hz(13), vib: 0.03, a: 0.15 }), noise(b, 0.1, 0.4, 600, 0.3, { to: 3000, q: 1, seed: 24 }))],
+  zap: [0.2, 0.45, (b) => (grains(b, 0, 0.18, 45, 5000, 1, 25), noise(b, 0, 0.2, 4500, 0.5, { q: 1.6, seed: 26 }), tone(b, 0, 0.2, 220, 0.5, { tri: true, vib: 0.2, h: 0.6 }))],
+  thunder: [1.6, 0.71, (b) => thunder(b, 30, 85)],
+  thunder2: [1.3, 0.71, (b) => thunder(b, 40, 95, true)],
+  thunder3: [1.8, 0.71, (b) => thunder(b, 50, 70)],
+  // 회상 장면(Scenes.tsx)이 쓰는 계열 소리
   heal: [0.9, 0.5, (b) => (notes(b, [12, 16, 19], 0.12, 0.6, { h: 0.15 }), tone(b, 0.3, 0.6, hz(31), 0.3, { vib: 0.01 }))],
   look: [0.5, 0.45, (b) => (tone(b, 0, 0.08, 700, 1, { h: 0.2 }), tone(b, 0.1, 0.08, 700, 1, { h: 0.2 }), tone(b, 0.2, 0.3, 500, 0.8, { to: 1100 }))],
   trap: [0.4, 0.5, (b) => (noise(b, 0, 0.05, 3000, 1, { seed: 9 }), tone(b, 0.01, 0.2, 330, 1, { to: 150, h: 0.4 }), knock(b, 0.2, 0.6))],
@@ -215,6 +286,8 @@ function unlock() {
 const VARIED: Partial<Record<Sfx, [Sfx[], number, number]>> = {
   step: [["step", "step2", "step3", "step4", "step5"], 0.12, 0.04],
   yawn: [["yawn", "yawn2", "yawn3"], 0.15, 0.12], // 빠르기 ±12% ≈ 음높이 ±2반음, 길이 ±10%
+  thunder: [["thunder", "thunder2", "thunder3"], 0.1, 0.06],
+  balloon: [["balloon", "balloon2", "balloon3"], 0.1, 0.06],
 };
 const lastPick: Partial<Record<Sfx, number>> = {};
 export function play(name: Sfx, gain = 1, rate = 1) {
@@ -259,26 +332,6 @@ export function ambience(levels: Partial<Record<Amb, number>>) {
     g.gain.setTargetAtTime(level, ctx.currentTime, 0.8);
   }
 }
-
-// 역할의 능력이 어느 계열 소리를 내는가
-const FAMILY: Record<Role, Sfx> = {
-  doctor: "heal",
-  survivor: "heal",
-  lookout: "look",
-  investigator: "look",
-  tracker: "look",
-  snitch: "look",
-  blocker: "trap",
-  trapper: "trap",
-  provoker: "trap",
-  cleaner: "trap",
-  blamer: "trap",
-  thief: "trap",
-  serialKiller: "attack",
-  bomber: "attack",
-  sorcerer: "hex",
-  haunter: "hex",
-};
 
 // 화면 어디서든: 첫 입력에 소리를 켜고, 버튼을 누르면 딸깍 소리를 낸다
 export function useUiSound() {
@@ -334,7 +387,8 @@ export function useGameSound(view: View, due: number | null) {
       else if (phase === "day" && picked(view) > picked(was)) play("vote", 0.4);
       const act = me.act;
       if (phase === "night" && act && act.mode !== "rest" && (act.mode !== was.me.act?.mode || act.target !== was.me.act?.target))
-        play(act.mode === "kill" || act.mode === "detonate" ? "attack" : act.mode === "armor" ? "heal" : me.role ? FAMILY[me.role] : "confirm");
+        // 고르는 순간에는 그 역할의 준비 소리. 번개·폭발 같은 결과 소리는 3D 연출이 제때 낸다.
+        play(act.mode === "kill" ? "kill" : act.mode === "detonate" ? "fuse" : act.mode === "armor" ? "survivor" : (me.role ?? "confirm"));
     }
   }, [view]);
 
