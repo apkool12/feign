@@ -11,12 +11,12 @@ import { clone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { Bubble } from "./Bubble";
 import { COLORS } from "./colors";
 import { bedtime, doorOpen, Doorway, DOORS, hinge, indoors, late, sky, tick, turn, useDark, useTurn } from "./Dusk";
-import { AbilityEffect, Burst, RoleIcon, Shield } from "./Effects";
+import { AbilityEffect, Bomb, Burning, Burst, Candle, RoleIcon, Shield } from "./Effects";
 import { Fire } from "./Fire";
 import { Post, Veil, toon } from "./Look";
 import { Replay, ReplayHud } from "./Scenes";
 import { play } from "./sound";
-import type { Flash } from "./stage";
+import { lean, type Call, type Exile, type Flash } from "./stage";
 import { collider, lift, plan, Terrain, type Circle, type Plan } from "./Terrain";
 
 export type Scene = "lobby" | "night" | "day" | "ended";
@@ -52,6 +52,13 @@ interface Props {
   demo?: boolean; // 메뉴 배경: 조작 없이 카메라가 스스로 돈다 (이름이 빈 자리는 이름표도 없다)
   replay?: Flash | null; // 어젯밤 회상: 이 장면이 도는 동안 마을은 밤으로 돌아가고 평소의 캐릭터들은 물러난다
   onReplayEnd?: () => void;
+  exile?: Exile | null; // 추방: 풍선에 실려 날아가고 묘비가 떨어진다 (낮이 끝난 직후, 모두가 본다)
+  onExileEnd?: () => void;
+  call?: Call | null; // 아침 발표: 회상이 끝난 뒤, 모두가 광장에 모여 밤사이 공개된 일을 본다
+  onCallEnd?: () => void;
+  burnt?: string[]; // 어젯밤 폭탄에 터진 집들 (낮 동안 그을음과 가는 연기가 남는다)
+  unseen?: string[]; // 밤사이 죽었지만 아직 발표되지 않은 사람들 (집이 멀쩡해 보여야 한다)
+  onSeen?: (id: string) => void;
   onPick: (id: string) => void;
   onMove: (x: number, z: number) => void;
 }
@@ -578,7 +585,7 @@ function Done({ y }: { y: number }) {
   );
 }
 
-function House({ seat, color, spot, night, wait, onPick }: { seat: Seat; color: string; spot: Spot; night: boolean; wait: number; onPick: (id: string) => void }) {
+function House({ seat, color, spot, night, wait, burnt = false, onPick }: { seat: Seat; color: string; spot: Spot; night: boolean; wait: number; burnt?: boolean; onPick: (id: string) => void }) {
   const [hover, setHover] = useState(false);
   // 창문 불은 주인이 들어간 뒤에 켜지고, 아침에는 나오기 전에 꺼진다
   const [home, setHome] = useState(night);
@@ -623,40 +630,25 @@ function House({ seat, color, spot, night, wait, onPick }: { seat: Seat; color: 
         <Doorway house={seat.house} open={door} />
         {!seat.alive && (
           <Pop>
-            <Model file="grave" position={[1.75, 0, 1.9]} rotation-y={0.3} />
+            <Model file="grave" position={[1.75, 0, 1.9]} rotation={[0, 0.3, lean(seat.id)]} />
           </Pop>
         )}
       </Suspense>
       {seat.mark && <Ring key={seat.mark} color={MARK[seat.mark]} />}
-      {seat.effect && <AbilityEffect kind={seat.effect} />}
+      {seat.effect && <AbilityEffect kind={seat.effect} h={shape.h} door={DOORS[seat.house]?.z} />}
+      {burnt && <Burning h={shape.h} flames={false} />}
       {seat.effect && seat.effect !== "kill" && seat.effect !== "detonate" && <RoleIcon role={seat.effect} y={shape.h + 2.9} size={0.85} />}
       {booms > 0 && <Burst key={booms} />}
       {seat.alive && shape.smoke && <Smoke at={shape.smoke} />}
       {seat.done && <Done y={shape.h + 0.75} />}
       {seat.bombed && (
-        <group position={[-1.5, 0.2, 1.5]}>
-          <Throb speed={9} amount={0.12}>
-            <mesh castShadow>
-              <sphereGeometry args={[0.2, 12, 12]} />
-              <meshStandardMaterial color="#1c1c1c" emissive="#ff3b1f" emissiveIntensity={0.35} />
-            </mesh>
-          </Throb>
+        <group position={[-1.5, 0, 1.5]}>
+          <Bomb hot={seat.effect === "detonate"} />
         </group>
       )}
       {seat.marked && (
-        <group position={[1.5, 0.2, 1.5]}>
-          <mesh>
-            <cylinderGeometry args={[0.07, 0.07, 0.4, 8]} />
-            <meshStandardMaterial color="#fff3c4" />
-          </mesh>
-          <group position={[0, 0.3, 0]}>
-            <Throb speed={13} amount={0.25}>
-              <mesh>
-                <coneGeometry args={[0.05, 0.16, 6]} />
-                <meshStandardMaterial color="#ffd166" emissive="#ffb300" emissiveIntensity={3} />
-              </mesh>
-            </Throb>
-          </group>
+        <group position={[1.5, 0, 1.5]}>
+          <Candle />
         </group>
       )}
       {seat.name && <Label title={`${seat.mayor ? "시장 " : ""}${seat.name}${seat.isMe ? " (나)" : ""}`} status={seat.status} y={shape.h + 0.75} />}
@@ -814,6 +806,7 @@ function spread(puff: THREE.Group | null, progress: number) {
 }
 
 type VillagerProps = {
+  start?: THREE.Vector3; // 처음 나타날 자리 (없으면 to)
   seat: Seat;
   color: string;
   to: THREE.Vector3;
@@ -830,7 +823,7 @@ type VillagerProps = {
 };
 
 // 다른 플레이어. 위치를 보내 왔으면 거기로, 아니면 제자리(to)로 간다.
-function Villager({ seat, color, to, spot, wait, visible, land, positions, night, shock, sad, bodies, onPick }: VillagerProps) {
+function Villager({ seat, color, to, start, spot, wait, visible, land, positions, night, shock, sad, bodies, onPick }: VillagerProps) {
   const ref = useRef<THREE.Group>(null);
   const clip = useRef("idle");
   const bed = useRef({ at: turn.at, from: new THREE.Vector3(), quiet: false });
@@ -838,7 +831,7 @@ function Villager({ seat, color, to, spot, wait, visible, land, positions, night
   const puff = useRef<THREE.Group>(null);
   const death = useDeath(seat.alive);
   useLayoutEffect(() => {
-    ref.current?.position.set(to.x, 0, to.z);
+    ref.current?.position.set((start ?? to).x, 0, (start ?? to).z);
     const all = bodies.current;
     return () => void all.delete(seat.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -891,6 +884,7 @@ function Villager({ seat, color, to, spot, wait, visible, land, positions, night
 }
 
 type MeProps = {
+  start?: THREE.Vector3;
   seat: Seat;
   color: string;
   to: THREE.Vector3;
@@ -910,7 +904,7 @@ type MeProps = {
 };
 
 // 내 캐릭터. WASD나 방향키로 직접 움직이고, 페이즈가 바뀌거나 집을 고르면 그리로 알아서 걸어간다.
-function Me({ seat, color, to, spot, wait, limit, acting: visiting, night, shock, sad, iconRole, shield, land, collide, controls, onMove }: MeProps) {
+function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night, shock, sad, iconRole, shield, land, collide, controls, onMove }: MeProps) {
   const ref = useRef<THREE.Group>(null);
   const bed = useRef({ at: turn.at, from: new THREE.Vector3() });
   const puff = useRef<THREE.Group>(null);
@@ -925,7 +919,7 @@ function Me({ seat, color, to, spot, wait, limit, acting: visiting, night, shock
   const death = useDeath(seat.alive);
   const [gone, setGone] = useState(!seat.alive);
   useLayoutEffect(() => {
-    ref.current?.position.set(to.x, 0, to.z);
+    ref.current?.position.set((start ?? to).x, 0, (start ?? to).z);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useFrame((state, dt) => {
@@ -1039,11 +1033,17 @@ function Me({ seat, color, to, spot, wait, limit, acting: visiting, night, shock
   );
 }
 
-export default function Village({ seats, scene, going, iconRole, shield, positions, demo = false, replay = null, onReplayEnd, onPick, onMove }: Props) {
+export default function Village({ seats, scene, going, iconRole, shield, positions, demo = false, replay = null, onReplayEnd, call = null, onCallEnd, exile = null, onExileEnd, unseen = [], burnt = [], onSeen, onPick, onMove }: Props) {
   const n = seats.length;
   const spots = useMemo(() => layout(n), [n]);
-  const [summed, setSummed] = useState(false); // 회상이 정리 단계에 들어섰다
-  useEffect(() => setSummed(false), [replay]);
+  const [beat, setBeat] = useState(-1); // 회상·발표의 화면 아래 글이 어디까지 넘어갔나
+  useEffect(() => setBeat(-1), [replay, call, exile]);
+  // 추방 장면이 끝나면 사람들은 장면의 마지막 자리(물러선 광장)에서 이어받아, 거기서부터 집으로 돌아간다
+  const scattered = useRef(false);
+  if (exile) scattered.current = true;
+  useEffect(() => {
+    if (!exile) scattered.current = false;
+  });
   const night = scene === "night" || (!!replay && !CALM);
   useTurn(night ? "night" : scene, !demo); // 회상이 도는 동안은 아직 밤이다. 끝나면 아침이 온다.
   const dark = useDark(night); // 모닥불 불빛과 화면 가장자리 그늘은 하늘이 반쯤 넘어갔을 때 바뀐다
@@ -1092,7 +1092,7 @@ export default function Village({ seats, scene, going, iconRole, shield, positio
       <Post night={night} />
       <Scenery n={n} night={dark} land={land} props={props} />
       {seats.map((seat, i) => (
-        <House key={seat.id} seat={seat} color={COLORS[i % COLORS.length]} spot={spots[i]} night={night} wait={late(i)} onPick={onPick} />
+        <House key={seat.id} seat={unseen.includes(seat.id) ? { ...seat, alive: true } : seat} color={COLORS[i % COLORS.length]} spot={spots[i]} night={night} wait={late(i)} burnt={burnt.includes(seat.id) && !unseen.includes(seat.id)} onPick={onPick} />
       ))}
       {replay && (
         <Replay
@@ -1100,14 +1100,48 @@ export default function Village({ seats, scene, going, iconRole, shield, positio
           seats={seats}
           spots={spots}
           sizes={seats.map((s) => shapeOf(s.house).r)}
+          heights={seats.map((s) => shapeOf(s.house).h)}
+          doors={seats.map((s) => DOORS[s.house]?.z ?? 1.09)}
           land={land}
           calm={CALM}
           controls={controls}
-          onSum={() => setSummed(true)}
+          onBeat={setBeat}
           onEnd={() => onReplayEnd?.()}
         />
       )}
-      {!replay && seats.map((seat, i) => {
+      {exile && (
+        <Replay
+          exile={exile}
+          seats={seats}
+          spots={spots}
+          sizes={seats.map((s) => shapeOf(s.house).r)}
+          heights={seats.map((s) => shapeOf(s.house).h)}
+          doors={seats.map((s) => DOORS[s.house]?.z ?? 1.09)}
+          land={land}
+          calm={CALM}
+          controls={controls}
+          onBeat={setBeat}
+          onMark={onSeen}
+          onEnd={() => onExileEnd?.()}
+        />
+      )}
+      {!replay && !exile && call && (
+        <Replay
+          call={call.events}
+          seats={seats}
+          spots={spots}
+          sizes={seats.map((s) => shapeOf(s.house).r)}
+          heights={seats.map((s) => shapeOf(s.house).h)}
+          doors={seats.map((s) => DOORS[s.house]?.z ?? 1.09)}
+          land={land}
+          calm={CALM}
+          controls={controls}
+          onBeat={setBeat}
+          onMark={onSeen}
+          onEnd={() => onCallEnd?.()}
+        />
+      )}
+      {!replay && !call && !exile && seats.map((seat, i) => {
         const color = COLORS[i % COLORS.length];
         // 밤에는 집 앞(내가 고른 집이 있으면 그 집 앞), 낮에는 광장에 모인다
         const home = scene === "lobby" || night ? spots[i].door : spots[i].plaza;
@@ -1115,6 +1149,7 @@ export default function Village({ seats, scene, going, iconRole, shield, positio
           const to = night && goingTo ? goingTo.door : home;
           return (
             <Me
+              start={scattered.current ? spots[i].plaza.clone().multiplyScalar(1.4) : undefined}
               key={seat.id}
               seat={seat}
               color={color}
@@ -1137,11 +1172,11 @@ export default function Village({ seats, scene, going, iconRole, shield, positio
         }
         // 밤에 남들이 어디 있는지는 알 수 없다
         const visible = seat.alive && (!night || seat.ally);
-        return <Villager key={seat.id} seat={seat} color={color} to={home} spot={spots[i]} wait={late(i)} visible={visible} land={land} positions={positions} night={night} shock={shock} sad={scene === "ended" && !seat.won} bodies={bodies} onPick={onPick} />;
+        return <Villager key={seat.id} start={scattered.current ? spots[i].plaza.clone().multiplyScalar(1.4) : undefined} seat={seat} color={color} to={home} spot={spots[i]} wait={late(i)} visible={visible} land={land} positions={positions} night={night} shock={shock} sad={scene === "ended" && !seat.won} bodies={bodies} onPick={onPick} />;
       })}
     </Canvas>
     <Veil night={dark} />
-    {replay && <ReplayHud flash={replay} seats={seats} sum={summed} />}
+    {(replay || call || exile) && <ReplayHud flash={replay} call={call} exile={exile} seats={seats} beat={beat} calm={CALM} />}
     </>
   );
 }
