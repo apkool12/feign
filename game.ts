@@ -27,9 +27,20 @@ export type Rng = () => number;
 export type Channel = "all" | "imposter" | "dead"; // 대화가 보이는 범위
 
 export const SKIP = "skip";
+// 고를 수 있는 캐릭터 생김새. 규칙과는 무관하다.
+export const SKINS = ["blob", "chiikawa", "hachiware", "usagi"] as const;
+export type Skin = (typeof SKINS)[number];
+// 고를 수 있는 집 모양. 첫 번째가 기본 집이고 규칙과는 무관하다.
+export const HOUSES = ["house", "house-1", "house-2", "house-3", "house-4", "house-5", "house-6", "house-7", "house-8"] as const;
+export type House = (typeof HOUSES)[number];
+export const HATS = ["none", "straw", "wizard", "top", "bow"] as const;
+export type Hat = (typeof HATS)[number];
 export const MIN_PLAYERS = 4;
 export const MAX_PLAYERS = 10;
 export const ELECTION_MS = 60_000;
+export const FIRST_NIGHT_MS = 30_000; // 1일차 밤에만 더 주는 시간 (역할을 읽을 시간)
+export const CLOSE_MS = 5_000; // 기다릴 사람이 없어지면 이만큼 뒤에 마감한다
+export const QUIET_MAX = 6; // 밤낮을 합쳐 이만큼 연속으로 아무도 안 죽으면 무승부
 // 방장이 고를 수 있는 밤·낮 제한 시간(초)
 export const NIGHT_CHOICES = [45, 60, 90, 120];
 export const DAY_CHOICES = [120, 180, 300];
@@ -62,7 +73,7 @@ export const ROLES: Record<Role, { name: string; action: string; desc: string }>
   provoker: {
     name: "선동꾼",
     action: "선동",
-    desc: "게임 중 두 번, 한 명이 다음 낮 투표를 2표 받은 채 시작하게 합니다. 선동 표만으로는 추방되지 않습니다.",
+    desc: "게임 중 두 번, 한 명이 다음 낮 투표를 2표 받은 채 시작하게 합니다. 선동 표만으로는 추방되지 않고, 남은 사람이 적으면 선동 표가 줄어듭니다.",
   },
   tracker: { name: "추적자", action: "추적", desc: "밤에 한 명을 추적해 그 사람이 누구 집에 갔는지 알아냅니다." },
   cleaner: {
@@ -83,7 +94,7 @@ export const ROLES: Record<Role, { name: string; action: string; desc: string }>
   serialKiller: {
     name: "연쇄 살인범",
     action: "살해",
-    desc: "밤마다 한 명을 죽입니다. 막히지도 들키지도 않고, 공격당한 사람은 그날 밤 행동하지 못합니다. 혼자 남으면 승리합니다.",
+    desc: "밤마다 한 명을 죽입니다. 막히지도 들키지도 않고, 공격당한 사람은 그날 밤 행동하지 못하며 죽으면 역할이 가려집니다. 혼자 남으면 승리합니다.",
   },
   bomber: {
     name: "폭파범",
@@ -98,12 +109,12 @@ export const ROLES: Record<Role, { name: string; action: string; desc: string }>
   sorcerer: {
     name: "마법사",
     action: "저주",
-    desc: "한 명의 역할을 맞히면 그 사람이 죽고, 틀리면 자신이 죽습니다. 혼자 남으면 승리합니다.",
+    desc: "한 명의 역할을 맞히면 그 사람이 죽고, 틀리면 자신이 죽습니다. 막히지도 감시에 보이지도 않고, 저주와 양초 말고는 밤 공격에 죽지 않습니다. 혼자 남으면 승리합니다.",
   },
   haunter: {
     name: "무속인",
     action: "양초 두기",
-    desc: "밤에 한 명에게 양초를 둡니다. 투표로 추방당하면 다음 밤 그 사람을 죽이고 승리합니다.",
+    desc: "밤에 한 명에게 양초를 둡니다. 투표로 추방당하면 다음 밤 그 사람을 습격하고, 그 밤이 오면 상대가 살아남아도 승리합니다.",
   },
 };
 export const TEAM_NAME: Record<Team, string> = { innocent: "시민", imposter: "임포스터", neutral: "중립" };
@@ -129,11 +140,50 @@ export interface Setup {
   slots: Slot[]; // 직접 고른 역할들 (auto가 아닐 때 쓴다)
   night: number; // 밤 제한 시간(초)
   day: number;
+  calm: boolean; // 첫 밤 평화: 1일차 밤에는 어떤 공격으로도 죽지 않는다
 }
 
 const USES: Partial<Record<Role, number>> = { snitch: 1, provoker: 2, survivor: 3 }; // 횟수 제한
 const KILLERS: Role[] = ["serialKiller", "bomber", "sorcerer", "thief"]; // 살아 있으면 게임이 안 끝나는 중립
 const UNSEEN: Role[] = ["serialKiller", "sorcerer"]; // 막히지 않고 감시에도 보이지 않는다
+
+export type Seen = { role: Role; team: Team };
+// 방금 지난 밤에 내가 본 것. notes의 글자 결과와 같은 내용을 화면이 장면으로 그릴 수 있게 담는다.
+// 정신병자는 글자 결과와 똑같은 가짜 장면을 받는다.
+export type Scene =
+  | { kind: "lookout"; house: string; visitors: string[] } // house 집에 찾아온 사람들
+  | { kind: "tracker"; who: string; went: string[]; out: boolean } // out인데 went가 비면 외출했지만 들른 집이 없다(폭파)
+  | { kind: "blocker"; who: string; tried: boolean }
+  | { kind: "trapper"; house: string; caught: boolean }
+  | { kind: "investigator"; who: string; options: [Seen, Seen] }
+  | { kind: "snitch"; who: string; role: Role | null; team: Team | null } // 대상이 죽어 밀고하지 못하면 null
+  | { kind: "doctor"; who: string; saved: boolean }
+  | { kind: "thief"; who: string; stolen: Seen | null } // 훔치지 못하면 null
+  // 당한 쪽: 경찰관에게 막힘, 덫에 걸림, 습격으로 행동 못 함, 의사가 다녀감, 선동당함
+  | { kind: "blocked" | "trapped" | "raided" | "healed" | "provoked" };
+
+export type HitKind = "curse" | "sk" | "bomb" | "kill" | "thief" | "haunt";
+export type Stop = "sk" | "blocker" | "trap"; // 행동이 무효가 된 까닭
+// 복기용 기록. 게임이 끝난 뒤에만 view로 내려간다.
+export type HistoryEntry =
+  | {
+      kind: "night";
+      day: number;
+      // 살아 있던 전원의 행동. mode가 kill이면 target은 살해 대상이고 extra는 함께 쓴 능력의 대상. fake는 정신병자의 가짜 능력
+      acts: {
+        by: string;
+        role: Role;
+        fake: boolean;
+        mode: Mode;
+        target: string | null;
+        extra: string | null;
+        guess: Role | null;
+        stopped: Stop | null;
+      }[];
+      hits: { by: string; victim: string; kind: HitKind; died: boolean }[]; // 공격과 그 결과
+    }
+  // day가 0이면 시장 선거. chosen은 추방된 사람(선거면 뽑힌 시장), votes는 표 수(선동 표 포함)
+  | { kind: "day"; day: number; ballots: { by: string; to: string }[]; tally: { id: string; votes: number }[]; chosen: string | null };
 
 export interface Act {
   mode: Mode;
@@ -146,6 +196,9 @@ export interface Player {
   id: string; // 공개 id
   token: string; // 재접속용 비밀 값, 절대 view에 넣지 않는다
   name: string;
+  skin: Skin;
+  house: House;
+  hat: Hat;
   connected: boolean;
   alive: boolean;
   role: Role; // 정신병자면 본인이 믿는 역할
@@ -167,6 +220,7 @@ export interface Player {
   won: boolean;
   notes: string[]; // 본인만 보는 결과
   news: string[]; // notes 중 방금 정산에서 생긴 것
+  scenes: Scene[]; // 방금 지난 밤에 본 것 (다음 밤이 되면 비운다)
 }
 
 export interface Room {
@@ -182,6 +236,9 @@ export interface Room {
   chat: { name: string; text: string; to: Channel }[]; // name이 ""이면 시스템 안내
   winner: Winner | null;
   result: string; // 승패 문구
+  why: string; // 왜 끝났는지 한 줄
+  quiet: number; // 아무도 죽거나 추방되지 않은 밤낮이 연속 몇 번인가
+  history: HistoryEntry[];
   deadline: number | null; // 현재 페이즈가 자동으로 넘어가는 시각 (서버가 관리)
 }
 
@@ -191,7 +248,7 @@ export function newRoom(code: string): Room {
     phase: "lobby",
     day: 0,
     players: [],
-    setup: { auto: true, slots: [], night: 90, day: 180 },
+    setup: { auto: true, slots: [], night: 90, day: 180, calm: false },
     mayor: null,
     roster: [],
     log: [],
@@ -199,6 +256,9 @@ export function newRoom(code: string): Room {
     chat: [],
     winner: null,
     result: "",
+    why: "",
+    quiet: 0,
+    history: [],
     deadline: null,
   };
 }
@@ -208,6 +268,9 @@ export function newPlayer(id: string, token: string, name: string): Player {
     id,
     token,
     name,
+    skin: "blob",
+    house: "house",
+    hat: "none",
     connected: true,
     alive: true,
     role: "doctor",
@@ -229,6 +292,7 @@ export function newPlayer(id: string, token: string, name: string): Player {
     won: false,
     notes: [],
     news: [],
+    scenes: [],
   };
 }
 
@@ -282,9 +346,18 @@ function dealSlots(slots: Slot[], rng: Rng) {
 }
 
 // 판 설정을 바꾼다. 받은 값은 믿지 않고 하나씩 확인한다. 실패하면 사유를 돌려준다.
-export function configure(room: Room, auto: unknown, slots: unknown, night: unknown, day: unknown): string | null {
+// calm은 예전 클라이언트가 보내지 않으므로 없으면 지금 값을 둔다.
+export function configure(
+  room: Room,
+  auto: unknown,
+  slots: unknown,
+  night: unknown,
+  day: unknown,
+  calm: unknown = room.setup.calm,
+): string | null {
   if (room.phase !== "lobby") return "대기실에서만 바꿀 수 있어요";
-  if (!Array.isArray(slots) || slots.length > MAX_PLAYERS) return "역할은 열 개까지 넣을 수 있어요";
+  if (typeof auto !== "boolean" || typeof calm !== "boolean" || !Array.isArray(slots)) return "잘못된 설정이에요";
+  if (slots.length > MAX_PLAYERS) return "역할은 열 개까지 넣을 수 있어요";
   const clean: Slot[] = [];
   for (const s of slots) {
     const role = s?.role as Slot["role"];
@@ -293,7 +366,28 @@ export function configure(room: Room, auto: unknown, slots: unknown, night: unkn
     clean.push({ role, team });
   }
   if (!NIGHT_CHOICES.includes(night as number) || !DAY_CHOICES.includes(day as number)) return "고를 수 없는 시간이에요";
-  room.setup = { auto: auto !== false, slots: clean, night: night as number, day: day as number };
+  room.setup = { auto, slots: clean, night: night as number, day: day as number, calm };
+  return null;
+}
+
+// 캐릭터 생김새를 바꾼다. 실패하면 사유를 돌려준다.
+export function setSkin(p: Player, skin: unknown): string | null {
+  if (!SKINS.includes(skin as Skin)) return "고를 수 없는 캐릭터예요";
+  p.skin = skin as Skin;
+  return null;
+}
+
+// 집 모양을 바꾼다. 실패하면 사유를 돌려준다.
+export function setHouse(p: Player, house: unknown): string | null {
+  if (!HOUSES.includes(house as House)) return "고를 수 없는 집이에요";
+  p.house = house as House;
+  return null;
+}
+
+// 모자를 바꾼다. 실패하면 사유를 돌려준다.
+export function setHat(p: Player, hat: unknown): string | null {
+  if (!HATS.includes(hat as Hat)) return "고를 수 없는 모자예요";
+  p.hat = hat as Hat;
   return null;
 }
 
@@ -305,6 +399,8 @@ export function canStart(room: Room): string | null {
   if (auto) return null;
   if (slots.length !== n) return `역할은 ${slots.length}개인데 사람은 ${n}명이에요. 수를 맞춰 주세요`;
   if (!slots.some((s) => s.team === "imposter")) return "임포스터가 한 명은 있어야 해요";
+  const end = verdict(slots);
+  if (end) return `이 구성은 시작하자마자 끝나요 (${end.why})`;
   return null;
 }
 
@@ -315,15 +411,22 @@ function announce(room: Room, line: string) {
 }
 
 // 역할은 시장 선거가 끝난 뒤에 정한다 (역할을 알고 뽑으면 출마만으로 의심받는다)
+// 지난 판의 흔적(사망, 결과, 메모, 대화, 시장 등)을 지운다. 판 설정과 생김새·집은 남긴다.
+function reset(room: Room) {
+  for (const p of room.players) {
+    Object.assign(p, newPlayer(p.id, p.token, p.name), { connected: p.connected, skin: p.skin, house: p.house, hat: p.hat });
+  }
+  Object.assign(room, newRoom(room.code), { players: room.players, setup: room.setup });
+}
+
+// 끝난 판을 치우고 대기실로 돌아간다. 접속이 끊긴 사람은 내보낸다.
+export function toLobby(room: Room) {
+  room.players = room.players.filter((p) => p.connected);
+  reset(room);
+}
+
 export function start(room: Room) {
-  for (const p of room.players) Object.assign(p, newPlayer(p.id, p.token, p.name), { connected: p.connected });
-  room.day = 0;
-  room.mayor = null;
-  room.roster = [];
-  room.log = [];
-  room.news = [];
-  room.winner = null;
-  room.result = "";
+  reset(room);
   room.phase = "day";
   announce(room, "게임을 시작합니다. 먼저 시장을 뽑습니다. 역할은 선거가 끝나면 정해집니다.");
 }
@@ -389,29 +492,39 @@ export function pick(room: Room, p: Player, target: string): string | null {
 }
 
 // 게임 중 죽은 사람은 죽은 사람끼리만, 밤에는 임포스터 편끼리만 대화한다. 그 외에는 전체 대화.
+// 대화의 청중 규칙은 이 두 함수에만 있다 (말, 입력 중 표시가 함께 쓴다).
+// 지금 p가 말하면 나가는 범위. null이면 말할 수 없다.
+export function channel(room: Room, p: Player): Channel | null {
+  const playing = room.phase === "night" || room.phase === "day";
+  if (playing && !p.alive) return p.will && room.phase === "day" ? "all" : "dead"; // 유언은 모두에게
+  if (room.phase === "night") return p.team === "imposter" ? "imposter" : null;
+  return "all";
+}
+
+// me가 그 범위의 말을 볼 수 있는가. 끝나면 비밀 대화도 전부 공개한다.
+export function hears(room: Room, me: Player, to: Channel): boolean {
+  const spoiled = !me.alive && !me.will; // 유언을 남길 수 있는 동안에는 비밀을 볼 수 없다
+  return to === "all" || room.phase === "ended" || (to === "dead" && spoiled) || (to === "imposter" && me.team === "imposter");
+}
+
 export function say(room: Room, p: Player, text: string): string | null {
   text = text.trim().slice(0, 200);
   if (!text) return "내용을 입력해 주세요";
-  const playing = room.phase === "night" || room.phase === "day";
-  let to: Channel = "all";
-  if (playing && !p.alive) {
-    if (p.will && room.phase === "day") {
-      p.will = false;
-      text = `(유언) ${text}`;
-    } else to = "dead";
-  } else if (room.phase === "night") {
-    if (p.team !== "imposter") return "밤에는 대화할 수 없어요";
-    to = "imposter";
+  const to = channel(room, p);
+  if (!to) return "밤에는 대화할 수 없어요";
+  if (!p.alive && to === "all" && room.phase === "day") {
+    p.will = false;
+    text = `(유언) ${text}`;
   }
   room.chat.push({ name: p.name, text, to });
   if (room.chat.length > 200) room.chat.shift();
   return null;
 }
 
-// 아직 고르지 않은 사람들
+// 아직 고르지 않은 사람들. 접속이 끊긴 사람은 기다리지 않는다 (정산 때 무행동/기권이 된다).
 function pending(room: Room): Player[] {
   const night = room.phase === "night";
-  return room.players.filter((p) => p.alive && (night ? p.act : p.pick) === null);
+  return room.players.filter((p) => p.alive && p.connected && (night ? p.act : p.pick) === null);
 }
 
 export function allPicked(room: Room): boolean {
@@ -450,7 +563,11 @@ function resolveNight(room: Room, rng: Rng) {
   const target = (p: Player) => byId(aimId(p))!; // 능력의 대상
   const goes = (p: Player) => [p.act?.target, p.act?.extra].filter((id) => id != null); // 찾아가는 집들
   const oneOf = <T>(a: T[]) => a[Math.floor(rng() * a.length)];
-  const note = (p: Player, text: string) => p.notes.push(`${night}: ${text}`);
+  // 본인만 보는 결과. scene은 같은 내용을 화면이 장면으로 그리기 위한 것
+  const note = (p: Player, text: string, scene?: Scene) => {
+    p.notes.push(`${night}: ${text}`);
+    if (scene) p.scenes.push(scene);
+  };
   // 같은 순서 안에서는 무작위로 발동한다
   const users = (role: Role) =>
     shuffle(
@@ -458,8 +575,8 @@ function resolveNight(room: Room, rng: Rng) {
       rng,
     );
 
-  const stopped = new Set<Player>(); // 막히거나 덫에 걸려 행동이 무효가 된 사람
-  const hits: { victim: Player; kind: "curse" | "sk" | "bomb" | "kill" | "thief" | "haunt" }[] = [];
+  const stopped = new Map<Player, Stop>(); // 막히거나 덫에 걸려 행동이 무효가 된 사람
+  const hits: { victim: Player; kind: HitKind; by: Player }[] = [];
   // 정신병자는 실제로 움직이지 않는다 (의사인 줄 아는 정신병자만 예외로 찾아간다)
   const visiting = (p: Player) => !stopped.has(p) && goes(p).length > 0 && (!p.insane || p.role === "doctor");
   const visitors = (house: Player, except: Player) =>
@@ -476,19 +593,21 @@ function resolveNight(room: Room, rng: Rng) {
     p.haunting = false;
     p.won = true;
     const t = byId(p.mark);
-    if (t?.alive) hits.push({ victim: t, kind: "haunt" });
+    if (t?.alive) hits.push({ victim: t, kind: "haunt", by: p });
   }
 
   for (const p of users("sorcerer")) {
-    hits.push({ victim: p.act!.guess === target(p).role ? target(p) : p, kind: "curse" });
+    hits.push({ victim: p.act!.guess === target(p).role ? target(p) : p, kind: "curse", by: p });
   }
 
   // 연쇄 살인범에게 공격당한 사람은 그날 밤 행동하지 못한다
   for (const p of users("serialKiller")) {
-    hits.push({ victim: target(p), kind: "sk" });
-    if (UNSEEN.includes(target(p).role)) continue;
-    stopped.add(target(p));
-    note(target(p), "습격을 받아 오늘 밤 행동하지 못했습니다.");
+    const t = target(p);
+    hits.push({ victim: t, kind: "sk", by: p });
+    // 갑옷은 집 안에서 쓰는 방어라 습격을 받아도 발동한다
+    if (UNSEEN.includes(t.role) || t.act?.mode === "armor") continue;
+    stopped.set(t, "sk");
+    note(t, "습격을 받아 오늘 밤 행동하지 못했습니다.", { kind: "raided" });
   }
 
   for (const p of users("blocker")) {
@@ -496,11 +615,11 @@ function resolveNight(room: Room, rng: Rng) {
     const t = target(p);
     // 폭탄을 터뜨리러 나가는 것도 외출이다
     const tried = p.insane ? rng() < 0.5 : goes(t).length > 0 || t.act?.mode === "detonate";
-    note(p, `${t.name} 님은 외출을 시도${tried ? "했습니다" : "하지 않았습니다"}.`);
+    note(p, `${t.name} 님은 외출을 시도${tried ? "했습니다" : "하지 않았습니다"}.`, { kind: "blocker", who: t.id, tried });
     if (p.insane) continue;
     if (UNSEEN.includes(t.role)) continue;
-    stopped.add(t);
-    note(t, "경찰관에게 막혀 집 밖으로 나가지 못했습니다.");
+    stopped.set(t, "blocker");
+    note(t, "경찰관에게 막혀 집 밖으로 나가지 못했습니다.", { kind: "blocked" });
   }
 
   for (const p of users("trapper")) {
@@ -509,11 +628,15 @@ function resolveNight(room: Room, rng: Rng) {
     const caught = p.insane ? [] : visitors(t, p);
     if (caught.length) {
       const victim = oneOf(caught);
-      stopped.add(victim);
-      note(victim, "덫에 걸려 오늘 밤 행동하지 못했습니다.");
+      stopped.set(victim, "trap");
+      note(victim, "덫에 걸려 오늘 밤 행동하지 못했습니다.", { kind: "trapped" });
     }
     const sprung = p.insane ? rng() < 0.3 : caught.length > 0;
-    note(p, `${t.name} 님 집 앞의 덫에 ${sprung ? "누군가 걸렸습니다" : "아무도 걸리지 않았습니다"}.`);
+    note(p, `${t.name} 님 집 앞의 덫에 ${sprung ? "누군가 걸렸습니다" : "아무도 걸리지 않았습니다"}.`, {
+      kind: "trapper",
+      house: t.id,
+      caught: sprung,
+    });
   }
 
   // 여기서부터는 막힌 사람과 정신병자의 능력이 발동하지 않는다
@@ -528,13 +651,13 @@ function resolveNight(room: Room, rng: Rng) {
     for (const q of alive) {
       if (!q.bombed) continue;
       q.bombed = false;
-      hits.push({ victim: q, kind: "bomb" });
+      hits.push({ victim: q, kind: "bomb", by: p });
     }
   }
 
   const imposterRoles = all.filter((p) => p.team === "imposter").map((p) => p.role);
   for (const p of alive) {
-    if (p.act?.mode === "kill" && !stopped.has(p)) hits.push({ victim: byId(p.act.target)!, kind: "kill" });
+    if (p.act?.mode === "kill" && !stopped.has(p)) hits.push({ victim: byId(p.act.target)!, kind: "kill", by: p });
   }
   for (const p of users("cleaner")) if (works(p)) target(p).cleaned = true;
   for (const p of users("blamer")) if (works(p)) target(p).blamed = oneOf(imposterRoles);
@@ -544,17 +667,17 @@ function resolveNight(room: Room, rng: Rng) {
     if (!works(p)) continue;
     const t = target(p);
     if (t.role === "survivor" || t.role === "sorcerer") {
-      note(p, `${t.name} 님에게서는 훔칠 수 없었습니다.`);
+      note(p, `${t.name} 님에게서는 훔칠 수 없었습니다.`, { kind: "thief", who: t.id, stolen: null });
       continue;
     }
-    hits.push({ victim: t, kind: "thief" });
+    hits.push({ victim: t, kind: "thief", by: p });
     thefts.push([p, t]);
   }
 
   const healed = new Set<Player>();
   for (const p of users("doctor")) {
     if (stopped.has(p)) continue;
-    note(target(p), "의사가 다녀갔습니다.");
+    note(target(p), "의사가 다녀갔습니다.", { kind: "healed" });
     if (!p.insane) healed.add(target(p));
   }
 
@@ -565,9 +688,10 @@ function resolveNight(room: Room, rng: Rng) {
     p.uses!--;
   }
 
-  // 사망 판정. 저주는 치료할 수 없고, 마법사는 저주와 양초로만 죽는다.
-  const dying = new Set(
-    hits
+  // 사망 판정. 저주는 치료할 수 없고, 마법사는 저주와 양초로만 죽는다. 평화로운 첫 밤에는 아무도 죽지 않는다.
+  const calm = room.setup.calm && room.day === 1;
+  const dying = new Set<Player>(
+    (calm ? [] : hits)
       .filter(
         (h) =>
           !armored.has(h.victim) &&
@@ -584,6 +708,7 @@ function resolveNight(room: Room, rng: Rng) {
     // 정신병자는 아무도 죽지 않은 밤이면 자기가 살렸다고 믿는다
     const believes = p.insane ? dying.size === 0 : attacked.has(t) && !dying.has(t);
     if (believes) note(p, `${t.name} 님을 공격에서 지켜냈습니다.`);
+    p.scenes.push({ kind: "doctor", who: t.id, saved: believes });
   }
 
   for (const p of users("provoker")) {
@@ -591,41 +716,50 @@ function resolveNight(room: Room, rng: Rng) {
     p.uses!--;
     if (p.insane) continue;
     target(p).provoked = true;
-    note(target(p), "누군가 집 앞에서 확성기로 떠들었습니다.");
+    note(target(p), "누군가 집 앞에서 확성기로 떠들었습니다.", { kind: "provoked" });
   }
 
-  const fake = (not: string): string => {
+  const real = (p: Player): Seen => ({ role: p.role, team: p.team });
+  const name = (s: Seen) => tag(s.role, s.team);
+  const fake = (not?: Seen): Seen => {
     for (;;) {
       const role = oneOf(Object.keys(ROLES) as Role[]);
-      const made = tag(role, oneOf(teamsOf(role)));
-      if (made !== not) return made;
+      const made = { role, team: oneOf(teamsOf(role)) };
+      if (made.role !== not?.role || made.team !== not.team) return made;
     }
   };
 
   for (const p of users("investigator")) {
     if (stopped.has(p)) continue;
     const t = target(p);
-    const a = p.insane ? fake("") : tag(t.role, t.team);
+    const a = p.insane ? fake() : real(t);
     const b = fake(a);
-    note(p, `${t.name} 님은 ${rng() < 0.5 ? `${a} 또는 ${b}` : `${b} 또는 ${a}`}입니다.`);
+    const options: [Seen, Seen] = rng() < 0.5 ? [a, b] : [b, a];
+    note(p, `${t.name} 님은 ${name(options[0])} 또는 ${name(options[1])}입니다.`, { kind: "investigator", who: t.id, options });
   }
 
   for (const p of users("snitch")) {
     if (stopped.has(p)) continue;
     const t = target(p);
     if (dying.has(t)) {
-      note(p, `${t.name} 님이 죽어 밀고하지 못했습니다. 횟수는 줄지 않습니다.`);
+      note(p, `${t.name} 님이 죽어 밀고하지 못했습니다. 횟수는 줄지 않습니다.`, { kind: "snitch", who: t.id, role: null, team: null });
       continue;
     }
     p.uses!--;
-    note(p, `${t.name} 님의 역할은 ${p.insane || t.insane ? fake("") : tag(t.role, t.team)}입니다.`);
+    const found = p.insane || t.insane ? fake() : real(t);
+    note(p, `${t.name} 님의 역할은 ${name(found)}입니다.`, { kind: "snitch", who: t.id, ...found });
   }
 
   for (const p of users("lookout")) {
     if (stopped.has(p)) continue;
     const t = target(p);
-    const seen = (p.insane ? [someone(p, t)].filter((q) => q !== null) : visitors(t, p)).map((q) => q.name);
-    note(p, `${t.name} 님 집에 ${seen.length ? `${seen.join(", ")} 님이 찾아왔습니다` : "아무도 오지 않았습니다"}.`);
+    const seen = p.insane ? [someone(p, t)].filter((q) => q !== null) : visitors(t, p);
+    const names = seen.map((q) => q.name).join(", ");
+    note(p, `${t.name} 님 집에 ${names ? `${names} 님이 찾아왔습니다` : "아무도 오지 않았습니다"}.`, {
+      kind: "lookout",
+      house: t.id,
+      visitors: seen.map((q) => q.id),
+    });
   }
 
   for (const p of users("tracker")) {
@@ -638,7 +772,13 @@ function resolveNight(room: Room, rng: Rng) {
         ? [...new Set(goes(t))].map((id) => byId(id)!)
         : [];
     const houses = went.map((q) => q.name).join(", ");
-    note(p, `${t.name} 님은 ${houses ? `${houses} 님 집에 갔습니다` : "외출하지 않았습니다"}.`);
+    // 폭탄을 터뜨리러 나간 것도 외출이지만 들른 집은 없다 (경찰관의 결과와 맞춘다)
+    const out = went.length > 0 || (!p.insane && t.act?.mode === "detonate" && !stopped.has(t));
+    note(
+      p,
+      `${t.name} 님은 ${houses ? `${houses} 님 집에 갔습니다` : out ? "외출했지만 들른 집은 없습니다" : "외출하지 않았습니다"}.`,
+      { kind: "tracker", who: t.id, went: went.map((q) => q.id), out },
+    );
   }
 
   for (const p of all) p.last = p.alive ? aimId(p) : null;
@@ -653,12 +793,32 @@ function resolveNight(room: Room, rng: Rng) {
   }
   if (!dying.size) announce(room, `${night}: 아무도 죽지 않았습니다.`);
 
+  room.history.push({
+    kind: "night",
+    day: room.day,
+    acts: alive.map((p) => ({
+      by: p.id,
+      role: p.role,
+      fake: p.insane,
+      mode: p.act?.mode ?? "rest",
+      target: p.act?.target ?? null,
+      extra: p.act?.extra ?? null,
+      guess: p.act?.guess ?? null,
+      stopped: stopped.get(p) ?? null,
+    })),
+    hits: hits.map((h) => ({ by: h.by.id, victim: h.victim.id, kind: h.kind, died: dying.has(h.victim) })),
+  });
+
   // 도둑은 죽이는 데 성공해야 역할을 빼앗는다
   for (const [thief, t] of thefts) {
     if (!dying.has(t) || dying.has(thief)) continue;
     assign(thief, t.insane ? oneOf(INNOCENT) : t.role, t.team);
     thief.stole = true;
-    note(thief, `${t.name} 님의 역할을 빼앗았습니다. 이제 ${tag(thief.role, thief.team)}입니다.`);
+    note(thief, `${t.name} 님의 역할을 빼앗았습니다. 이제 ${tag(thief.role, thief.team)}입니다.`, {
+      kind: "thief",
+      who: t.id,
+      stolen: { role: thief.role, team: thief.team },
+    });
   }
 }
 
@@ -669,13 +829,25 @@ function resolveDay(room: Room, rng: Rng) {
   const ballots = alive.map((p, i) => `${p.name}→${nameOf(votes[i])}`).join(", ");
   const count = new Map<string, number>(); // 0.1표 단위
   const add = (id: string, n: number) => id !== SKIP && count.set(id, (count.get(id) ?? 0) + n);
+  const record = (chosen: string | null) =>
+    room.history.push({
+      kind: "day",
+      day: room.day,
+      ballots: alive.map((p, i) => ({ by: p.id, to: votes[i] })),
+      tally: [...count].map(([id, n]) => ({ id, votes: n / 10 })),
+      chosen,
+    });
 
   if (room.day === 0) {
     announce(room, `시장 선거: ${ballots}`);
     votes.forEach((v) => add(v, 10));
     const t = tops(count);
-    if (!t.length) return announce(room, "시장이 뽑히지 않았습니다.");
+    if (!t.length) {
+      record(null);
+      return announce(room, "시장이 뽑히지 않았습니다.");
+    }
     room.mayor = t[Math.floor(rng() * t.length)];
+    record(room.mayor);
     announce(room, `${nameOf(room.mayor)} 님이 시장이 되었습니다.${t.length > 1 ? " (동률이라 추첨)" : ""} 시장의 표는 1.1표입니다.`);
     return;
   }
@@ -696,16 +868,19 @@ function resolveDay(room: Room, rng: Rng) {
   const t = tops(count);
   if (t.length !== 1 || count.get(t[0])! * 2 <= alive.length * 10) {
     announce(room, "과반을 얻은 사람이 없어 아무도 추방되지 않았습니다.");
+    record(null);
     return;
   }
   const out = room.players.find((p) => p.id === t[0])!;
+  record(out.id);
   die(out);
   announce(room, `${out.name} 님이 추방당했습니다. (${out.reveal})`);
   if (out.role === "haunter" && out.mark) out.haunting = true;
 }
 
-function finish(room: Room, winner: Winner, solo?: Player) {
+function finish(room: Room, winner: Winner, why: string, solo?: Player) {
   room.winner = winner;
+  room.why = why;
   room.phase = "ended";
   room.result =
     winner === "draw"
@@ -721,19 +896,22 @@ function finish(room: Room, winner: Winner, solo?: Player) {
   // 무승부여도 무속인·생존자처럼 자기 조건을 채운 사람은 따로 이긴다
   const solos = room.players.filter((p) => p.won).map((p) => p.name);
   if (winner === "draw" && solos.length) room.result = `무승부 (${solos.join(", ")} 님은 개인 승리)`;
-  announce(room, `${room.result}!`);
+  announce(room, `${room.result}! ${why}.`);
 }
 
-// 생존자는 누구의 승패에도 영향을 주지 않으므로 세지 않는다
-function checkWin(room: Room) {
-  const live = room.players.filter((p) => p.alive && p.role !== "survivor");
+// 남은 사람들로 승패가 갈렸는가. 생존자는 누구의 승패에도 영향을 주지 않으므로 세지 않는다.
+// 판 구성(Slot)에도 그대로 쓴다: 시작하자마자 끝나는 구성을 걸러 낸다.
+function verdict<T extends Slot>(all: T[]): { winner: Winner; why: string; solo?: T } | null {
+  const live = all.filter((p) => p.role !== "survivor");
   const imposters = live.filter((p) => p.team === "imposter").length;
-  const killers = live.filter((p) => p.team === "neutral" && KILLERS.includes(p.role));
+  const killers = live.filter((p) => p.team === "neutral" && KILLERS.includes(p.role as Role));
   const rest = live.length - imposters - killers.length;
-  if (!live.length) finish(room, "draw");
-  else if (!imposters && !killers.length) finish(room, "innocent");
-  else if (!killers.length && imposters >= rest) finish(room, "imposter");
-  else if (!imposters && killers.length === 1 && rest <= 1) finish(room, "solo", killers[0]);
+  if (!live.length) return { winner: "draw", why: "아무도 살아남지 못했습니다" };
+  if (!imposters && !killers.length) return { winner: "innocent", why: "임포스터와 살인 중립이 모두 사라졌습니다" };
+  if (!killers.length && imposters >= rest) return { winner: "imposter", why: "임포스터가 남은 사람의 절반 이상입니다" };
+  if (!imposters && killers.length === 1 && rest <= 1)
+    return { winner: "solo", why: "임포스터가 사라지고 다른 사람이 한 명 이하로 남았습니다", solo: killers[0] };
+  return null;
 }
 
 // 현재 페이즈를 정산하고 다음으로 넘긴다. 고르지 않은 사람은 무행동/기권 처리.
@@ -741,6 +919,9 @@ export function advance(room: Room, rng: Rng = Math.random) {
   if (room.phase !== "night" && room.phase !== "day") return;
   const logFrom = room.log.length;
   const notesFrom = room.players.map((p) => p.notes.length);
+  const living = () => room.players.filter((p) => p.alive);
+  const before = living().length;
+  const election = room.phase === "day" && room.day === 0;
 
   if (room.phase === "night") {
     resolveNight(room, rng);
@@ -754,11 +935,18 @@ export function advance(room: Room, rng: Rng = Math.random) {
       room.roster = hands.map((h) => h.role).sort((a, b) => order.indexOf(a) - order.indexOf(b));
       announce(room, "역할이 정해졌습니다. 자신의 역할을 확인하세요.");
     }
-    for (const p of room.players) p.will = false; // 유언은 죽은 다음 낮에만 남길 수 있다
+    for (const p of room.players) {
+      p.will = false; // 유언은 죽은 다음 낮에만 남길 수 있다
+      p.scenes = [];
+    }
     room.phase = "night";
     room.day++;
   }
-  checkWin(room);
+  // 교착 무승부: 서로 이길 수 없는 사람들만 남아 판이 끝나지 않는 것을 막는다
+  if (!election) room.quiet = living().length < before ? 0 : room.quiet + 1;
+  const end = verdict(living());
+  if (end) finish(room, end.winner, end.why, end.solo);
+  else if (room.quiet >= QUIET_MAX) finish(room, "draw", `${QUIET_MAX}번 연속으로 아무도 죽거나 추방되지 않았습니다`);
 
   room.news = room.log.slice(logFrom);
   room.players.forEach((p, i) => {
@@ -797,19 +985,14 @@ export function view(room: Room, me: Player, now = Date.now()) {
     day: room.day,
     winner: room.winner,
     result: room.result,
+    why: room.why,
+    history: room.phase === "ended" ? room.history : null, // 복기용. 진행 중에는 절대 내려보내지 않는다
     roster: room.roster,
     setup: room.setup,
     remaining: room.deadline === null ? null : Math.max(0, room.deadline - now),
     pending: playing ? pending(room).length : 0,
     news: [...room.news, ...me.news],
-    // 끝나면 비밀 대화도 전부 공개한다
-    chat: room.chat.filter(
-      (c) =>
-        c.to === "all" ||
-        room.phase === "ended" ||
-        (c.to === "dead" && spoiled) ||
-        (c.to === "imposter" && me.team === "imposter"),
-    ),
+    chat: room.chat.filter((c) => hears(room, me, c.to)),
     hostId: room.players.find((p) => p.connected)?.id ?? null,
     me: {
       id: me.id,
@@ -825,10 +1008,14 @@ export function view(room: Room, me: Player, now = Date.now()) {
       // 오늘 밤 능력 대상으로 고를 수 없는 사람
       blocked: night && me.role === "doctor" ? me.last : null,
       notes: me.notes,
+      scenes: me.scenes,
     },
     players: room.players.map((p) => ({
       id: p.id,
       name: p.name,
+      skin: p.skin,
+      house: p.house,
+      hat: p.hat,
       alive: p.alive,
       connected: p.connected,
       mayor: p.id === room.mayor,

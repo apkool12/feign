@@ -1,6 +1,27 @@
 // 실행: npm test
 import assert from "node:assert/strict";
-import { act, advance, canStart, configure, deal, newPlayer, newRoom, pick, say, SKIP, start, view } from "./game.ts";
+import {
+  act,
+  advance,
+  allPicked,
+  canStart,
+  channel,
+  configure,
+  deal,
+  hears,
+  newPlayer,
+  newRoom,
+  pick,
+  QUIET_MAX,
+  ROLES,
+  say,
+  setHat,
+  setHouse,
+  SKIP,
+  start,
+  toLobby,
+  view,
+} from "./game.ts";
 import type { Player, Role, Room, Team } from "./game.ts";
 
 const NEUTRAL = ["survivor", "serialKiller", "bomber", "thief", "sorcerer", "haunter"];
@@ -311,6 +332,24 @@ for (let n = 4; n <= 10; n++) {
   assert.equal(r.winner, "imposter");
 }
 
+// 입력 중 표시도 말과 같은 청중 규칙을 쓴다: 밤의 시민은 범위가 없고, 임포스터의 것은 임포스터만, 죽은 사람의 것은 죽은 사람만
+{
+  const r = room("imp:cleaner", "imp:blamer", "doctor", "lookout", "tracker", "snitch", "provoker");
+  const [imp, imp2, doc, dead] = r.players;
+  assert.equal(channel(r, doc), null);
+  assert.equal(channel(r, imp), "imposter");
+  assert.ok(hears(r, imp2, "imposter") && !hears(r, doc, "imposter"));
+  dead.alive = false;
+  dead.will = false;
+  assert.equal(channel(r, dead), "dead");
+  assert.ok(!hears(r, doc, "dead") && !hears(r, imp, "dead") && hears(r, dead, "dead"));
+  r.phase = "day";
+  assert.equal(channel(r, doc), "all");
+  dead.will = true; // 유언을 쓰기 전에는 저승 대화를 못 보고, 쓰는 말은 모두에게 간다
+  assert.equal(channel(r, dead), "all");
+  assert.ok(!hears(r, dead, "dead"));
+}
+
 // 대화: 밤에는 임포스터 편끼리만, 죽은 사람은 죽은 사람끼리만 보인다
 {
   const r = room("imp:cleaner", "imp:blamer", "doctor", "lookout", "tracker", "snitch", "provoker");
@@ -327,6 +366,186 @@ for (let n = 4; n <= 10; n++) {
   assert.deepEqual(seen(dead), ["범인은 P0", "좋은 아침"]);
   r.phase = "ended";
   assert.equal(seen(doc).length, 3);
+}
+
+// 폭탄을 터뜨리러 나간 것은 추적자에게도 외출이다 (들른 집은 없다)
+{
+  const r = room("bomber", "tracker", "doctor", "lookout", "imp:cleaner");
+  night(r, { 0: "ability p2" });
+  night(r, { 0: "detonate", 1: "ability p0", 2: "ability p3" });
+  assert.match(notes(r.players[1]), /P0 님은 외출했지만 들른 집은 없습니다/);
+  assert.deepEqual(view(r, r.players[1]).me.scenes, [{ kind: "tracker", who: "p0", went: [], out: true }]);
+}
+
+// 연쇄 살인범의 습격에도 갑옷은 발동한다. 경찰관에게 막히면 못 쓴다.
+{
+  const r = room("survivor", "serialKiller", "imp:blocker", "doctor", "lookout");
+  night(r, { 0: "armor", 1: "ability p0" });
+  assert.equal(r.players[0].alive, true);
+  assert.equal(r.players[0].uses, 2);
+  assert.doesNotMatch(notes(r.players[0]), /습격/);
+  night(r, { 0: "armor", 1: "ability p0", 2: "ability p0" });
+  assert.equal(r.players[0].alive, false);
+}
+
+// 장면: 글자 결과와 같은 내용이 구조화되어 본인에게만 간다
+{
+  const r = room("imp:blamer", "blocker", "lookout", "trapper", "doctor", "tracker", "investigator", "snitch");
+  night(r, { 0: "kill p4", 1: "ability p0", 2: "ability p1", 3: "ability p4", 4: "ability p1", 5: "ability p4", 6: "ability p0", 7: "ability p0" });
+  const scenes = (i: number) => view(r, r.players[i]).me.scenes;
+  assert.deepEqual(scenes(0), [{ kind: "blocked" }]);
+  assert.deepEqual(scenes(1), [{ kind: "blocker", who: "p0", tried: true }, { kind: "healed" }]);
+  assert.deepEqual(scenes(2), [{ kind: "lookout", house: "p1", visitors: ["p4"] }]);
+  assert.deepEqual(scenes(3), [{ kind: "trapper", house: "p4", caught: true }]);
+  assert.deepEqual(scenes(4), [{ kind: "doctor", who: "p1", saved: false }]);
+  assert.deepEqual(scenes(5), [{ kind: "trapped" }]); // 덫에 걸린 추적자는 아무것도 보지 못한다
+  const [inv] = scenes(6);
+  assert.ok(inv.kind === "investigator" && inv.options.some((o) => o.role === "blamer" && o.team === "imposter"));
+  assert.deepEqual(scenes(7), [{ kind: "snitch", who: "p0", role: "blamer", team: "imposter" }]);
+  assert.equal(view(r, r.players[1]).history, null); // 복기 기록은 끝나기 전에는 내려가지 않는다
+  day(r, {});
+  assert.deepEqual(scenes(2), []); // 다음 밤이 되면 지난 장면은 비운다
+}
+
+// 장면: 의사는 치료 결과를, 치료받은 사람은 다녀간 것을 안다
+{
+  const r = room("imp:cleaner", "doctor", "lookout", "tracker", "snitch");
+  night(r, { 0: "kill p2", 1: "ability p2" });
+  assert.deepEqual(view(r, r.players[1]).me.scenes, [{ kind: "doctor", who: "p2", saved: true }]);
+  assert.deepEqual(view(r, r.players[2]).me.scenes, [{ kind: "healed" }]);
+}
+
+// 정신병자는 글자 결과와 똑같은 가짜 장면을 받는다
+{
+  const r = room("imp:cleaner", "mad:lookout", "mad:blocker", "mad:investigator", "doctor", "tracker");
+  night(r, { 0: "kill p5", 1: "ability p4", 2: "ability p0", 3: "ability p0" });
+  const name = (id: string) => r.players.find((p) => p.id === id)!.name;
+  const [look] = view(r, r.players[1]).me.scenes;
+  assert.ok(look.kind === "lookout" && look.house === "p4");
+  assert.match(notes(r.players[1]), look.visitors.length ? new RegExp(`${name(look.visitors[0])} 님이 찾아왔습니다`) : /아무도 오지 않았습니다/);
+  const [block] = view(r, r.players[2]).me.scenes;
+  assert.ok(block.kind === "blocker" && block.who === "p0");
+  assert.match(notes(r.players[2]), block.tried ? /시도했습니다/ : /시도하지 않았습니다/);
+  assert.deepEqual(view(r, r.players[0]).me.scenes, []); // 가짜 경찰관은 아무도 막지 못한다
+  const [inv] = view(r, r.players[3]).me.scenes;
+  assert.ok(inv.kind === "investigator");
+  for (const o of inv.options) assert.ok(notes(r.players[3]).includes(ROLES[o.role].name));
+}
+
+// 첫 밤 평화: 켜면 1일차 밤에는 아무도 죽지 않지만 능력과 정보는 그대로다. 2일차부터는 평소대로.
+{
+  const r = room("imp:cleaner", "serialKiller", "doctor", "lookout", "tracker", "snitch");
+  r.setup.calm = true;
+  night(r, { 0: "kill p2", 1: "ability p3", 4: "ability p0" });
+  assert.ok(r.players.every((p) => p.alive));
+  assert.match(notes(r.players[4]), /P0 님은 P2 님 집에 갔습니다/);
+  assert.match(notes(r.players[3]), /습격을 받아/);
+  r.day = 2;
+  night(r, { 0: "kill p2" });
+  assert.equal(r.players[2].alive, false);
+}
+
+// 교착 무승부: 서로 이길 수 없는 사람들만 남아도 판이 끝난다. 종료 사유가 남는다.
+{
+  const r = room("imp:cleaner", "sorcerer"); // 마법사는 살해에 죽지 않는다
+  for (let i = 1; i < QUIET_MAX; i++) {
+    if (i % 2) night(r, { 0: "kill p1" });
+    else day(r, {});
+    assert.equal(r.winner, null);
+  }
+  day(r, {});
+  assert.equal(r.winner, "draw");
+  assert.match(r.why, /6번 연속으로 아무도 죽거나 추방되지 않았습니다/);
+  assert.match(r.log.at(-1)!, /무승부.*6번 연속/);
+
+  const r2 = room("imp:cleaner", "doctor", "lookout", "tracker", "snitch");
+  for (let i = 0; i < QUIET_MAX - 1; i++) day(r2, {});
+  night(r2, { 0: "kill p1" }); // 누가 죽으면 다시 센다
+  assert.equal(r2.winner, null);
+  assert.equal(r2.quiet, 0);
+}
+
+// 승리 사유
+{
+  const r = room("imp:cleaner", "doctor", "lookout");
+  night(r, { 0: "kill p1" });
+  assert.equal(view(r, r.players[0]).why, "임포스터가 남은 사람의 절반 이상입니다");
+  const r2 = room("imp:cleaner", "doctor", "lookout");
+  day(r2, { 1: "p0", 2: "p0" });
+  assert.equal(r2.why, "임포스터와 살인 중립이 모두 사라졌습니다");
+}
+
+// 복기 기록: 밤과 낮마다 쌓이고, 끝난 뒤에만 내려간다
+{
+  const r = room("imp:cleaner", "doctor", "mad:lookout", "tracker", "snitch");
+  night(r, { 0: "kill p3", 1: "ability p3", 2: "ability p0" });
+  assert.ok(r.players.every((p) => view(r, p).history === null));
+  day(r, { 1: "p0", 2: "p0", 3: "p0" });
+  assert.equal(r.winner, "innocent");
+  const h = view(r, r.players[4]).history!;
+  assert.equal(h.length, 2);
+  assert.ok(h[0].kind === "night" && h[1].kind === "day");
+  if (h[0].kind === "night") {
+    assert.deepEqual(h[0].acts[0], { by: "p0", role: "cleaner", fake: false, mode: "kill", target: "p3", extra: null, guess: null, stopped: null });
+    assert.equal(h[0].acts[2].fake, true);
+    assert.equal(h[0].acts[4].mode, "rest");
+    assert.deepEqual(h[0].hits, [{ by: "p0", victim: "p3", kind: "kill", died: false }]);
+  }
+  if (h[1].kind === "day") {
+    assert.equal(h[1].chosen, "p0");
+    assert.deepEqual(h[1].tally, [{ id: "p0", votes: 3 }]);
+    assert.deepEqual(h[1].ballots[4], { by: "p4", to: SKIP });
+  }
+}
+
+// 접속이 끊긴 사람은 기다리지 않는다. 고르지 않았으면 무행동/기권으로 정산된다.
+{
+  const r = room("imp:cleaner", "doctor", "lookout", "tracker");
+  r.players[3].connected = false;
+  for (const i of [0, 1]) act(r, r.players[i], "rest");
+  assert.equal(allPicked(r), false);
+  assert.equal(view(r, r.players[0]).pending, 1);
+  act(r, r.players[2], "rest");
+  assert.equal(allPicked(r), true);
+  advance(r, seq());
+  assert.equal(r.phase, "day");
+}
+
+// 새 판과 대기실 복귀: 지난 판의 흔적이 남지 않고, 판 설정과 생김새·집은 남는다
+{
+  const r = room("imp:cleaner", "doctor", "lookout", "tracker");
+  assert.equal(configure(r, true, [], 60, 300), "대기실에서만 바꿀 수 있어요");
+  r.setup = { auto: true, slots: [], night: 60, day: 300, calm: true };
+  r.mayor = "p1";
+  r.players[1].skin = "usagi";
+  assert.ok(setHouse(r.players[1], "castle"));
+  assert.equal(setHouse(r.players[1], "house-3"), null);
+  assert.ok(setHat(r.players[1], "helmet"));
+  assert.equal(setHat(r.players[1], "wizard"), null);
+  assert.equal(say(r, r.players[0], "임포스터끼리만"), null);
+  night(r, { 0: "kill p1", 3: "ability p0" }); // 평화로운 첫 밤
+  day(r, {});
+  night(r, { 0: "kill p1" });
+  assert.equal(say(r, r.players[1], "유언"), null);
+  assert.equal(say(r, r.players[1], "저승에서"), null);
+  night(r, { 0: "kill p2" });
+  assert.equal(r.phase, "ended");
+  r.players[2].connected = false;
+  toLobby(r);
+  assert.deepEqual(r.players.map((p) => p.id), ["p0", "p1", "p3"]);
+  const v = view(r, r.players[1]);
+  assert.equal(v.phase, "lobby");
+  assert.deepEqual([v.chat, v.news, v.roster, v.me.notes, v.me.scenes], [[], [], [], [], []]);
+  assert.deepEqual([v.winner, v.result, v.why, v.history, v.day], [null, "", "", null, 0]);
+  assert.ok(v.players.every((p) => p.alive && !p.mayor && !p.won && p.label === null));
+  assert.deepEqual([v.players[1].skin, v.players[1].house, v.players[0].house], ["usagi", "house-3", "house"]);
+  assert.deepEqual(v.setup, { auto: true, slots: [], night: 60, day: 300, calm: true });
+
+  r.chat.push({ name: "P0", text: "지난 판 비밀", to: "imposter" });
+  start(r); // 대기실을 거치지 않고 시작해도 대화가 남지 않는다
+  assert.ok(!JSON.stringify(r.chat).includes("지난 판 비밀"));
+  assert.equal(r.players[1].house, "house-3");
+  assert.equal(view(r, r.players[0]).players[1].hat, "wizard"); // 모자도 판이 바뀌어도 남는다
 }
 
 // 방장이 고른 역할 구성: 잘못된 값은 거부하고, 고른 그대로 나눠 준다
@@ -346,8 +565,25 @@ for (let n = 4; n <= 10; n++) {
   assert.match(canStart(r)!, /역할은 4개인데 사람은 5명/);
   assert.equal(configure(r, false, good.slice(1).concat(good[1]), 60, 300), null);
   assert.match(canStart(r)!, /임포스터가 한 명은/);
+  // 시작하자마자 끝나는 구성은 막는다
+  const imp = good[0];
+  assert.equal(configure(r, false, [imp, imp, imp, good[1], good[3]], 60, 300), null);
+  assert.match(canStart(r)!, /시작하자마자 끝나요 \(임포스터가 남은 사람의 절반 이상/);
+  const survivor = { role: "survivor", team: "neutral" };
+  assert.equal(configure(r, false, [imp, good[1], survivor, survivor, survivor], 60, 300), null);
+  assert.match(canStart(r)!, /시작하자마자 끝나요/);
   assert.equal(configure(r, false, good, 60, 300), null);
   assert.equal(canStart(r), null);
+  // auto와 calm은 불리언만 받는다. calm을 보내지 않는 예전 클라이언트는 지금 값이 유지된다.
+  assert.ok(configure(r, "x", good, 60, 300));
+  assert.ok(configure(r, false, "x", 60, 300));
+  assert.ok(configure(r, false, good, 60, 300, "yes"));
+  assert.equal(r.setup.calm, false); // 기본은 꺼짐
+  assert.equal(configure(r, false, good, 60, 300, true), null);
+  assert.equal(configure(r, false, good, 60, 300), null);
+  assert.equal(r.setup.calm, true);
+  assert.deepEqual(r.setup.slots, good);
+  assert.equal(configure(r, false, good, 60, 300, false), null);
   start(r);
   advance(r, seq());
   assert.deepEqual(r.players.map((p) => p.team).sort(), ["imposter", "innocent", "innocent", "innocent", "neutral"]);
@@ -371,6 +607,10 @@ for (let n = 4; n <= 10; n++) {
       const alive = r.players.filter((p) => p.alive);
       for (const p of r.players) {
         const v = view(r, p);
+        // 복기 기록은 진행 중에 내려가지 않고, 장면은 자기 능력의 것과 당한 것만 받는다
+        assert.equal(v.history, null);
+        for (const s of v.me.scenes)
+          assert.ok(["blocked", "trapped", "raided", "healed", "provoked", p.role, p.stole && "thief"].includes(s.kind), `${p.role}: ${s.kind}`);
         if (p.alive && p.team !== "imposter")
           assert.ok(v.players.every((q) => q.id === p.id || !q.alive || q.label === null));
         if (!p.alive) continue;
@@ -379,7 +619,8 @@ for (let n = 4; n <= 10; n++) {
       }
       advance(r, rng);
     }
-    assert.ok(r.result);
+    assert.ok(r.result && r.why);
+    assert.ok(view(r, r.players[0]).history!.length > 0);
   }
 }
 
