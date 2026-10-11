@@ -830,6 +830,7 @@ function Villager({ seat, color, to, start, spot, wait, visible, land, positions
   const act = useRef(newAct(seat, shock));
   const puff = useRef<THREE.Group>(null);
   const death = useDeath(seat.alive);
+  const [gone, setGone] = useState(!seat.alive); // 쓰러지는 연출이 끝나면 유령이다 (죽은 사람 눈에만 보인다)
   useLayoutEffect(() => {
     ref.current?.position.set((start ?? to).x, 0, (start ?? to).z);
     const all = bodies.current;
@@ -842,6 +843,7 @@ function Villager({ seat, color, to, start, spot, wait, visible, land, positions
     const t = state.clock.elapsedTime;
     const { just, progress } = death(t);
     const b = bed.current;
+    if (gone !== (!seat.alive && (progress >= 1 || b.quiet))) setGone(!gone);
     if (seat.alive) b.quiet = false;
     else if (just && turn.cast && !turn.night) b.quiet = true; // 밤사이 죽은 사람은 아침에 집에서 나오지 않는다 (묘비만 선다)
     if (just) puff.current?.position.copy(g.position);
@@ -870,13 +872,13 @@ function Villager({ seat, color, to, start, spot, wait, visible, land, positions
     g.visible = visible;
     const live = positions.current.get(seat.id);
     const moving = walk(g, live?.x ?? to.x, live?.z ?? to.z, dt, live ? 10 : 2.5);
-    clip.current = acting(act.current, seat, shock, sad, t, moving, night);
+    clip.current = seat.alive ? acting(act.current, seat, shock, sad, t, moving, night) : moving ? "walk" : "idle";
     g.position.y = lift(land, g.position.x, g.position.z);
   });
   return (
     <>
       <group ref={ref} {...pickable(seat, onPick)}>
-        <Body seat={seat} color={color} clip={clip} />
+        <Body seat={seat} color={color} clip={clip} ghost={gone} />
       </group>
       <Puff group={puff} />
     </>
@@ -1171,7 +1173,8 @@ export default function Village({ seats, scene, going, iconRole, shield, positio
           );
         }
         // 밤에 남들이 어디 있는지는 알 수 없다
-        const visible = seat.alive && (!night || seat.ally);
+        // 유령끼리는 서로 보인다
+        const visible = seat.alive ? !night || seat.ally : !seats.find((s) => s.isMe)?.alive;
         return <Villager key={seat.id} start={scattered.current ? spots[i].plaza.clone().multiplyScalar(1.4) : undefined} seat={seat} color={color} to={home} spot={spots[i]} wait={late(i)} visible={visible} land={land} positions={positions} night={night} shock={shock} sad={scene === "ended" && !seat.won} bodies={bodies} onPick={onPick} />;
       })}
     </Canvas>

@@ -175,14 +175,14 @@ function onMessage(ws: WebSocket, m: Record<string, unknown>): string | void {
     }
     case "move": {
       // 마을에서 걸어다니는 위치를 같은 방 사람들에게 전한다. 규칙과 무관한 연출이라 저장하지 않는다.
-      // 밤의 이동과 죽은 사람의 위치는 비밀이므로 전하지 않는다.
+      // 밤의 이동은 비밀이라 전하지 않는다. 죽은 사람(유령)의 위치는 죽은 사람끼리만 본다.
       const { x, z } = m;
       if (typeof x !== "number" || typeof z !== "number") return;
-      const secret = room.phase === "night" || (room.phase === "day" && !player.alive);
-      if (secret || !Number.isFinite(x) || !Number.isFinite(z)) return;
+      const ghost = !player.alive && (room.phase === "night" || room.phase === "day");
+      if ((room.phase === "night" && !ghost) || !Number.isFinite(x) || !Number.isFinite(z)) return;
       const clamp = (n: number) => Math.max(-40, Math.min(40, n));
       const msg = JSON.stringify({ t: "pos", id: player.id, x: clamp(x), z: clamp(z) });
-      for (const [other, o] of sockets) if (o.room === room && other !== ws) other.send(msg);
+      for (const [other, o] of sockets) if (o.room === room && other !== ws && (!ghost || !o.player.alive)) other.send(msg);
       return;
     }
     case "next": // 자리 비운 사람을 기다리지 않고 넘기기
