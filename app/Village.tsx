@@ -10,6 +10,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { Bubble } from "./Bubble";
 import { COLORS } from "./colors";
+import { bedtime, doorOpen, Doorway, DOORS, hinge, indoors, late, sky, tick, turn, useDark, useTurn } from "./Dusk";
 import { AbilityEffect, Burst, RoleIcon, Shield } from "./Effects";
 import { Fire } from "./Fire";
 import { Post, Veil, toon } from "./Look";
@@ -192,13 +193,13 @@ type Paint = (name: string, material: THREE.MeshStandardMaterial) => void;
 // glb 모델 하나. 인스턴스마다 재질을 따로 가져서, paint로 재질 이름별 색을 바꿀 수 있다
 // (지붕·몸을 플레이어 색으로, 창문을 밤에 밝게 등). paint는 매번 원래 색에서 다시 칠한다.
 // 뼈대가 있는 모델(캐릭터)은 clip이 가리키는 동작을 재생하고, 표정 하나만 보이며(동작에 짝지은 표정이 face보다 먼저다), overhead를 머리 위 기준점에 붙인다.
-type ModelProps = { file: string; paint?: Paint; clip?: RefObject<string>; face?: string; overhead?: ReactNode };
-const ONCE = new Set(["vote", "startle", "turn", "die", "cast"]); // 한 번 하고 마지막 자세로 멈추는 동작
-const FACE: Record<string, string> = { cheer: "happy", startle: "surprised", die: "dead", sad: "scared" }; // 동작과 짝인 표정
+type ModelProps = { file: string; paint?: Paint; clip?: RefObject<string>; face?: string; overhead?: ReactNode; door?: RefObject<number> };
+const ONCE = new Set(["vote", "startle", "turn", "die", "cast", "yawn"]); // 한 번 하고 마지막 자세로 멈추는 동작
+const FACE: Record<string, string> = { cheer: "happy", startle: "surprised", die: "dead", sad: "scared", yawn: "sleepy" }; // 동작과 짝인 표정
 const STEP = 1 / 60; // 자세 갱신 간격 (클립 키 사이는 보간된다)
 const THIN = 0.025; // 집 외곽선 껍데기(두께 약 0.045)를 이만큼 안으로 당긴다
 
-export function Model({ file, paint, clip, face = "default", overhead, ...props }: ModelProps & ThreeElements["group"]) {
+export function Model({ file, paint, clip, face = "default", overhead, door, ...props }: ModelProps & ThreeElements["group"]) {
   const gltf = useLoader(GLTFLoader, `/models/${file}.glb`);
   const scene = useMemo(() => {
     const copy = clone(gltf.scene); // 뼈대까지 따로 복제한다
@@ -233,10 +234,12 @@ export function Model({ file, paint, clip, face = "default", overhead, ...props 
       paint?.(m.name, m);
     });
   });
-  // 풍차 날개(blades 노드)는 천천히 돈다
+  // 풍차 날개(blades 노드)는 천천히 돈다. 문짝은 door가 가리키는 만큼 열린다.
   const blades = useMemo(() => scene.getObjectByName("blades"), [scene]);
+  const hinged = useMemo(() => (DOORS[file]?.swing ? hinge(scene) : undefined), [scene, file]);
   useFrame((_, dt) => {
     if (blades && !CALM) blades.rotation.z += dt * 0.7;
+    if (hinged && door) hinged.rotation.y = -1.9 * door.current;
   });
   const mixer = useMemo(() => new THREE.AnimationMixer(scene), [scene]);
   const playing = useRef<THREE.AnimationAction | null>(null);
@@ -421,32 +424,42 @@ function Label({ title, status = "", y, size = 1 }: { title: string; status?: st
   );
 }
 
-// 낮과 밤 사이를 부드럽게 오간다
+// 낮과 밤 사이를 오간다. 바뀌는 동안에는 노을(새벽놀)을 거치고 해가 기울어 그림자가 길어진다.
+const GLOW = { sky: new THREE.Color("#f3a57c"), sun: new THREE.Color("#ff9a55"), ambient: new THREE.Color("#ffd0ae") };
+const HEMI = { day: [new THREE.Color("#cfe8ff"), new THREE.Color("#f0d9a8")], night: [new THREE.Color("#4a5fc0"), new THREE.Color("#2a2440")] };
 function Atmosphere({ night }: { night: boolean }) {
   const ambient = useRef<THREE.AmbientLight>(null);
+  const hemi = useRef<THREE.HemisphereLight>(null);
   const sun = useRef<THREE.DirectionalLight>(null);
-  const [sky] = useState(() => SKY[night ? "night" : "day"].clone());
-  useFrame((state, dt) => {
-    const k = 1 - Math.exp(-dt * 3);
-    const time = night ? "night" : "day";
-    sky.lerp(SKY[time], k);
-    state.scene.background = sky;
-    if (!state.scene.fog) state.scene.fog = new THREE.Fog(sky, 55, 170); // 먼 풀밭이 하늘색으로 스며든다
-    (state.scene.fog as THREE.Fog).color.copy(sky);
+  const [color] = useState(() => new THREE.Color());
+  useFrame((state) => {
+    tick(night);
+    const { night: p, glow } = sky;
+    const mix = THREE.MathUtils.lerp;
+    color.lerpColors(SKY.day, SKY.night, p).lerp(GLOW.sky, glow * 0.8);
+    state.scene.background = color;
+    if (!state.scene.fog) state.scene.fog = new THREE.Fog(color, 55, 170); // 먼 풀밭이 하늘색으로 스며든다
+    (state.scene.fog as THREE.Fog).color.copy(color);
     if (ambient.current) {
-      ambient.current.intensity += ((night ? 0.5 : 0.35) - ambient.current.intensity) * k;
-      ambient.current.color.lerp(AMBIENT[time], k);
+      ambient.current.intensity = mix(0.35, 0.5, p);
+      ambient.current.color.lerpColors(AMBIENT.day, AMBIENT.night, p).lerp(GLOW.ambient, glow * 0.6);
+    }
+    if (hemi.current) {
+      // 위에서는 푸른 하늘빛, 아래에서는 따뜻한 땅빛: 그늘진 면이 푸르게, 밑면이 따뜻하게 돈다
+      hemi.current.intensity = mix(0.9, 0.45, p);
+      hemi.current.color.lerpColors(HEMI.day[0], HEMI.night[0], p);
+      hemi.current.groundColor.lerpColors(HEMI.day[1], HEMI.night[1], p);
     }
     if (sun.current) {
-      sun.current.intensity += ((night ? 0.7 : 2.4) - sun.current.intensity) * k;
-      sun.current.color.lerp(SUN[time], k);
+      sun.current.intensity = mix(2.4, 0.7, p);
+      sun.current.color.lerpColors(SUN.day, SUN.night, p).lerp(GLOW.sun, glow);
+      sun.current.position.y = 22 - 13 * glow;
     }
   });
   return (
     <>
       <ambientLight ref={ambient} intensity={0.35} />
-      {/* 위에서는 푸른 하늘빛, 아래에서는 따뜻한 땅빛: 그늘진 면이 푸르게, 밑면이 따뜻하게 돈다 */}
-      <hemisphereLight args={night ? ["#4a5fc0", "#2a2440", 0.45] : ["#cfe8ff", "#f0d9a8", 0.9]} />
+      <hemisphereLight ref={hemi} />
       <directionalLight
         ref={sun}
         position={[14, 22, 9]}
@@ -565,9 +578,20 @@ function Done({ y }: { y: number }) {
   );
 }
 
-function House({ seat, color, spot, night, onPick }: { seat: Seat; color: string; spot: Spot; night: boolean; onPick: (id: string) => void }) {
+function House({ seat, color, spot, night, wait, onPick }: { seat: Seat; color: string; spot: Spot; night: boolean; wait: number; onPick: (id: string) => void }) {
   const [hover, setHover] = useState(false);
-  const lit = night && seat.alive;
+  // 창문 불은 주인이 들어간 뒤에 켜지고, 아침에는 나오기 전에 꺼진다
+  const [home, setHome] = useState(night);
+  const lit = home && seat.alive;
+  const door = useRef(0);
+  useFrame(() => {
+    if (indoors(night, wait) !== home) setHome(!home);
+    const open = seat.alive ? doorOpen(wait) : 0;
+    // 내 집 문소리는 또렷하게, 남의 집은 멀리서 들리듯 작게
+    if (open > 0.05 && door.current <= 0.05) play("door", seat.isMe ? 0.8 : 0.2);
+    if (open < 0.5 && door.current >= 0.5) play("doorShut", seat.isMe ? 0.8 : 0.2);
+    door.current = open;
+  });
   // 설치해 둔 폭탄이 사라지는 순간(터뜨린 다음 날 아침) 폭발을 보여 준다
   const hadBomb = useRef(seat.bombed);
   const [booms, setBooms] = useState(0);
@@ -587,7 +611,7 @@ function House({ seat, color, spot, night, onPick }: { seat: Seat; color: string
     if (!seat.alive) m.color.lerp(GRAY, 0.75); // 주인이 죽은 집은 빛이 바랜다
   };
   const model = (file: string) => (
-    <Model file={file} scale={hover && seat.enabled ? 1.05 : 1} {...pickable(seat, onPick, setHover)} paint={paint} />
+    <Model file={file} scale={hover && seat.enabled ? 1.05 : 1} {...pickable(seat, onPick, setHover)} paint={paint} door={door} />
   );
   return (
     <group position={spot.house} rotation-y={spot.angle + Math.PI}>
@@ -596,6 +620,7 @@ function House({ seat, color, spot, night, onPick }: { seat: Seat; color: string
         <Fallback key={seat.house} fallback={model("house")}>
           {model(seat.house)}
         </Fallback>
+        <Doorway house={seat.house} open={door} />
         {!seat.alive && (
           <Pop>
             <Model file="grave" position={[1.75, 0, 1.9]} rotation-y={0.3} />
@@ -792,6 +817,8 @@ type VillagerProps = {
   seat: Seat;
   color: string;
   to: THREE.Vector3;
+  spot: Spot;
+  wait: number; // 귀가·기상 연출에서 이 사람이 늦는 시간
   visible: boolean;
   land: Plan;
   positions: RefObject<Positions>;
@@ -803,9 +830,10 @@ type VillagerProps = {
 };
 
 // 다른 플레이어. 위치를 보내 왔으면 거기로, 아니면 제자리(to)로 간다.
-function Villager({ seat, color, to, visible, land, positions, night, shock, sad, bodies, onPick }: VillagerProps) {
+function Villager({ seat, color, to, spot, wait, visible, land, positions, night, shock, sad, bodies, onPick }: VillagerProps) {
   const ref = useRef<THREE.Group>(null);
   const clip = useRef("idle");
+  const bed = useRef({ at: turn.at, from: new THREE.Vector3(), quiet: false });
   const act = useRef(newAct(seat, shock));
   const puff = useRef<THREE.Group>(null);
   const death = useDeath(seat.alive);
@@ -820,12 +848,27 @@ function Villager({ seat, color, to, visible, land, positions, night, shock, sad
     if (!g) return;
     const t = state.clock.elapsedTime;
     const { just, progress } = death(t);
+    const b = bed.current;
+    if (seat.alive) b.quiet = false;
+    else if (just && turn.cast && !turn.night) b.quiet = true; // 밤사이 죽은 사람은 아침에 집에서 나오지 않는다 (묘비만 선다)
     if (just) puff.current?.position.copy(g.position);
-    spread(puff.current, progress);
+    if (!b.quiet) spread(puff.current, progress);
     // 보이지 않는 사람(밤의 남들, 죽은 사람)과는 부딪히지 않는다. 부딪히면 어디 있는지 들킨다.
     if (visible && seat.alive) bodies.current.set(seat.id, g.position);
     else bodies.current.delete(seat.id);
-    if (progress < 1) {
+    if (b.at !== turn.at) {
+      b.at = turn.at;
+      b.from.copy(g.position);
+    }
+    const show = seat.alive ? bedtime(g, spot, b.from, wait, dt) : null;
+    if (show) {
+      // 해 질 녘에는 하품하고 집으로, 새벽에는 집에서 나와 기지개
+      if (show === "yawn" && clip.current !== "yawn") play("yawn", 0.25);
+      clip.current = show;
+      g.position.y = lift(land, g.position.x, g.position.z);
+      return;
+    }
+    if (progress < 1 && !b.quiet) {
       // 쓰러졌다가 사라진다
       g.visible = true;
       clip.current = "die";
@@ -851,6 +894,8 @@ type MeProps = {
   seat: Seat;
   color: string;
   to: THREE.Vector3;
+  spot: Spot;
+  wait: number;
   limit: number;
   acting: boolean; // 오늘 밤 누군가의 집을 골랐다
   night: boolean;
@@ -865,8 +910,9 @@ type MeProps = {
 };
 
 // 내 캐릭터. WASD나 방향키로 직접 움직이고, 페이즈가 바뀌거나 집을 고르면 그리로 알아서 걸어간다.
-function Me({ seat, color, to, limit, acting: visiting, night, shock, sad, iconRole, shield, land, collide, controls, onMove }: MeProps) {
+function Me({ seat, color, to, spot, wait, limit, acting: visiting, night, shock, sad, iconRole, shield, land, collide, controls, onMove }: MeProps) {
   const ref = useRef<THREE.Group>(null);
+  const bed = useRef({ at: turn.at, from: new THREE.Vector3() });
   const puff = useRef<THREE.Group>(null);
   const keys = useKeys();
   const manual = useRef(false);
@@ -898,8 +944,19 @@ function Me({ seat, color, to, limit, acting: visiting, night, shock, sad, iconR
     const ahead = +(k.has("KeyW") || k.has("ArrowUp")) - +(k.has("KeyS") || k.has("ArrowDown"));
     const side = +(k.has("KeyD") || k.has("ArrowRight")) - +(k.has("KeyA") || k.has("ArrowLeft"));
     let moving = false;
+    if (bed.current.at !== turn.at) {
+      bed.current.at = turn.at;
+      bed.current.from.copy(g.position);
+    }
+    // 해 질 녘·새벽 연출 중에는 직접 걷지 못한다 (집은 누를 수 있다)
+    const show = seat.alive && progress >= 1 ? bedtime(g, spot, bed.current.from, wait, dt) : null;
+    if (!show) g.visible = true;
     if (progress < 1) {
       // 죽는 순간: 쓰러졌다가 유령이 되어 떠오른다
+    } else if (show) {
+      if (show === "yawn" && clip.current !== "yawn") play("yawn", 0.6);
+      manual.current = false;
+      moving = show === "walk";
     } else if (ahead || side) {
       manual.current = true;
       // 카메라가 보는 방향을 기준으로 움직인다
@@ -947,11 +1004,11 @@ function Me({ seat, color, to, limit, acting: visiting, night, shock, sad, iconR
       cut(act.current, "cast", t, 1.2); // 능력을 쓴다
     }
     arrived.shield = shield;
-    const calm = acting(act.current, seat, shock, sad, t, moving, night);
+    const calm = show ?? acting(act.current, seat, shock, sad, t, moving, night);
     clip.current = progress < 1 ? "die" : !seat.alive ? (moving ? "walk" : "idle") : calm; // 죽은 뒤는 유령의 동작
     if (gone !== (!seat.alive && progress >= 1)) setGone(!gone); // 쓰러지는 연출이 끝나면 유령으로 바뀐다
     g.position.y = lift(land, g.position.x, g.position.z);
-    if (moving && seat.alive && t > pace.current) {
+    if (moving && seat.alive && g.visible && t > pace.current) {
       // 걷기 클립 한 바퀴(0.5초, 살금살금 0.83초)에 두 걸음. 박자는 거의 일정하게, 변주는 소리 쪽에서 한다.
       pace.current = t + (night ? 0.417 : 0.25) * (0.95 + Math.random() * 0.1);
       night ? play("step", 0.45, 0.9) : play("step"); // 밤에는 작고 조금 낮게
@@ -988,6 +1045,8 @@ export default function Village({ seats, scene, going, iconRole, shield, positio
   const [summed, setSummed] = useState(false); // 회상이 정리 단계에 들어섰다
   useEffect(() => setSummed(false), [replay]);
   const night = scene === "night" || (!!replay && !CALM);
+  useTurn(night ? "night" : scene, !demo); // 회상이 도는 동안은 아직 밤이다. 끝나면 아침이 온다.
+  const dark = useDark(night); // 모닥불 불빛과 화면 가장자리 그늘은 하늘이 반쯤 넘어갔을 때 바뀐다
   const radius = ringRadius(n);
   const goingTo = spots[seats.findIndex((s) => s.id === going)];
   const controls = useRef<OrbitControls | null>(null);
@@ -1031,9 +1090,9 @@ export default function Village({ seats, scene, going, iconRole, shield, positio
       <Camera radius={radius} controls={controls} demo={demo} />
       <Atmosphere night={night} />
       <Post night={night} />
-      <Scenery n={n} night={night} land={land} props={props} />
+      <Scenery n={n} night={dark} land={land} props={props} />
       {seats.map((seat, i) => (
-        <House key={seat.id} seat={seat} color={COLORS[i % COLORS.length]} spot={spots[i]} night={night} onPick={onPick} />
+        <House key={seat.id} seat={seat} color={COLORS[i % COLORS.length]} spot={spots[i]} night={night} wait={late(i)} onPick={onPick} />
       ))}
       {replay && (
         <Replay
@@ -1060,6 +1119,8 @@ export default function Village({ seats, scene, going, iconRole, shield, positio
               seat={seat}
               color={color}
               to={to}
+              spot={spots[i]}
+              wait={late(i)}
               limit={radius + REACH}
               acting={night && !!goingTo}
               night={night}
@@ -1076,10 +1137,10 @@ export default function Village({ seats, scene, going, iconRole, shield, positio
         }
         // 밤에 남들이 어디 있는지는 알 수 없다
         const visible = seat.alive && (!night || seat.ally);
-        return <Villager key={seat.id} seat={seat} color={color} to={home} visible={visible} land={land} positions={positions} night={night} shock={shock} sad={scene === "ended" && !seat.won} bodies={bodies} onPick={onPick} />;
+        return <Villager key={seat.id} seat={seat} color={color} to={home} spot={spots[i]} wait={late(i)} visible={visible} land={land} positions={positions} night={night} shock={shock} sad={scene === "ended" && !seat.won} bodies={bodies} onPick={onPick} />;
       })}
     </Canvas>
-    <Veil night={night} />
+    <Veil night={dark} />
     {replay && <ReplayHud flash={replay} seats={seats} sum={summed} />}
     </>
   );
