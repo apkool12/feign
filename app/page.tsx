@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
+import pkg from "../package.json";
 import { COLORS } from "./colors";
 import { setFx, useFx } from "./fx";
 import { play, setVolume, useGameSound, useUiSound, volume } from "./sound";
@@ -9,7 +10,7 @@ import { said, typing } from "./talk";
 import { periodsOf } from "./timeline";
 import type { Period, Step } from "./timeline";
 import { ambience } from "./sound";
-import { flashOf, stage, type Flash } from "./stage";
+import { flashOf, stage, type Call, type Exile, type Flash } from "./stage";
 import type { Positions, Seat } from "./Village";
 import { DAY_CHOICES, HATS, HOUSES, INSANE, MAX_PLAYERS, MIN_PLAYERS, NIGHT_CHOICES, POOL, ROLES, SKINS, SKIP, TEAM_NAME } from "../game";
 import type { Hat, HistoryEntry, House, Mode, Role, Skin, Slot, Team, View } from "../game";
@@ -408,7 +409,7 @@ function Menu({ online, error, prefs, update, invite, onJoin }: MenuProps) {
       <button className="ib gear" aria-label="설정" onClick={() => setOpen("settings")}>
         {ICON.gear}
       </button>
-      <small className="ver">v0.1</small>
+      <small className="ver">v{pkg.version}</small>
 
       {open && (
         <Modal
@@ -586,10 +587,37 @@ function Game({ view, due, positions, send, leave }: GameProps) {
   // 마을이 낮을 한 순간도 먼저 보지 않게, 페이즈가 바뀐 그 렌더에서 바로 정한다
   const [before, setBefore] = useState(phase);
   const [replay, setReplay] = useState<Flash | null>(null);
+  // 그 뒤에 모두가 보는 아침 발표가 이어진다. 발표가 닿기 전까지 밤사이 죽은 사람의 집은 멀쩡해 보인다.
+  const [call, setCall] = useState<Call | null>(null);
+  const [unseen, setUnseen] = useState<string[]>([]);
+  const [told, setTold] = useState(""); // 발표로 다 보여 준 아침 (같은 내용의 소식 딱지는 띄우지 않는다)
+  // 낮이 추방으로 끝나면 쫓겨나는 장면부터 본다 (결과 화면도 그 뒤에)
+  const [exile, setExile] = useState<Exile | null>(null);
+  const [living, setLiving] = useState(() => players.filter((p) => p.alive).map((p) => p.id)); // 지난 페이즈가 시작될 때 살아 있던 사람들
   if (before !== phase) {
+    const dawn = before === "night" && phase === "day" && !asList;
+    // 낮 동안 사라진 사람이 추방된 사람이다 (게임이 그 추방으로 끝나도 같다)
+    const out = before === "day" && !asList ? players.find((p) => !p.alive && living.includes(p.id)) : undefined;
+    setLiving(players.filter((p) => p.alive).map((p) => p.id));
     setBefore(phase);
-    setReplay(before === "night" && phase === "day" && !asList ? flash : null);
+    setReplay(dawn ? flash : null);
+    setCall(dawn ? { events: view.dawn, mine: me.scenes } : null);
+    setExile(out ? { who: out.id, reveal: out.label ?? "" } : null);
+    if (out) stage.hold(6500); // 해 질 녘 귀가는 추방 장면이 끝난 뒤에 (마을이 이 렌더에서 바로 전환을 시작하므로 여기서 잡아 둔다)
+    setUnseen(dawn ? view.dawn.flatMap((e) => (e.kind === "death" ? [e.who] : [])) : out ? [out.id] : []);
   }
+
+  // 연출이 어떤 까닭으로든 끝나지 않으면 화면을 돌려준다
+  useEffect(() => {
+    if (!replay && !call && !exile) return;
+    const timer = setTimeout(() => {
+      setReplay(null);
+      setCall(null);
+      setExile(null);
+      setUnseen([]);
+    }, 16000);
+    return () => clearTimeout(timer);
+  }, [replay, call, exile]);
 
   // Tab: 마을 사람과 기록, Enter: 말하기
   useEffect(() => {
@@ -933,11 +961,26 @@ function Game({ view, due, positions, send, leave }: GameProps) {
         positions={positions}
         replay={replay}
         onReplayEnd={() => setReplay(null)}
+        exile={exile}
+        onExileEnd={() => {
+          setExile(null);
+          setUnseen([]);
+          setTold(phaseKey);
+        }}
+        call={call}
+        onCallEnd={() => {
+          setCall(null);
+          setUnseen([]);
+          setTold(phaseKey);
+        }}
+        burnt={phase === "day" ? view.dawn.flatMap((e) => (e.kind === "death" && e.blast ? [e.who] : [])) : []}
+        unseen={unseen}
+        onSeen={(id) => setUnseen((ids) => ids.filter((x) => x !== id))}
         onPick={pickSeat}
         onMove={(x, z) => send({ t: "move", x, z })}
       />
       {/* 회상이 도는 동안은 시계와 대화만 남긴다 */}
-      <div className={`pointer-events-none absolute inset-0 *:pointer-events-auto ${replay ? "replaying" : ""}`}>
+      <div className={`pointer-events-none absolute inset-0 *:pointer-events-auto ${replay || call || exile ? "replaying" : ""}`}>
         <div className="keep !pointer-events-none absolute inset-x-0 top-0 flex flex-col items-center gap-2">
           {phase !== "ended" && (
             <div className="clock paper">
@@ -948,7 +991,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
               </div>
             </div>
           )}
-          {playing && !replay && brief.length > 0 && (
+          {playing && !replay && !call && !exile && told !== phaseKey && brief.length > 0 && (
             <section key={phaseKey} aria-live="polite" className="toast paper max-w-[min(36rem,90vw)]">
               {brief.map((line, i) => (
                 <p key={i}>{line}</p>
@@ -957,21 +1000,14 @@ function Game({ view, due, positions, send, leave }: GameProps) {
           )}
         </div>
 
-        {playing && !replay && view.roster.length > 0 && (
+        {playing && !replay && !call && !exile && view.roster.length > 0 && (
           <ul className="roster" aria-label="이번 판 역할">
-            {(() => {
-              // 죽어서 드러난 역할은 한 장씩 꺼 둔다
-              const gone = players.filter((p) => !p.alive).map((p) => roleOf(p.label));
-              return view.roster.map((r, i) => {
-                const at = gone.indexOf(r);
-                if (at >= 0) gone.splice(at, 1);
-                return (
-                  <li key={i}>
-                    <RoleTile role={r} off={at >= 0} />
-                  </li>
-                );
-              });
-            })()}
+            {/* 정신병자가 섞여 있을 수 있어, 누가 죽어도 패를 끄지 않는다 */}
+            {view.roster.map((r, i) => (
+              <li key={i}>
+                <RoleTile role={r} />
+              </li>
+            ))}
           </ul>
         )}
 
@@ -1028,7 +1064,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
           </div>
         )}
 
-        {phase === "ended" && shut !== phaseKey && (
+        {phase === "ended" && !exile && shut !== phaseKey && (
           <div className="absolute inset-0 z-20 flex flex-col items-center gap-7 overflow-y-auto px-6 py-[8vh]">
             <div
               className="wash !fixed"
@@ -1191,6 +1227,16 @@ function Reveal({ label }: { label?: string }) {
 
 function StepRow({ step, colors }: { step: Step; colors: Colors }) {
   if (step.kind === "text") return <li className="opacity-75">{step.text}</li>;
+  if (step.kind === "point")
+    return (
+      <li>
+        <Face name={step.by} colors={colors} />
+        <span className="gl" title="지목">
+          {ICON.to}
+        </span>
+        <Face name={step.who} colors={colors} />
+      </li>
+    );
   if (step.kind !== "votes" && step.kind !== "go" && step.kind !== "hit")
     return (
       <li>

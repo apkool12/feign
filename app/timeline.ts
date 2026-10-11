@@ -3,6 +3,7 @@ export type Ballot = { by: string; to: string | null }; // to가 null이면 기�
 export type Step =
   | { kind: "dead" | "out" | "mayor"; who: string; reveal?: string }
   | { kind: "votes"; ballots: Ballot[]; tally: Record<string, number> }
+  | { kind: "point"; by: string; who: string } // 밀고자가 아침에 지목했다
   | { kind: "go"; by: string; role: string | null; to: string | null; off: boolean; fake: boolean; title: string } // role이 null이면 살해
   | { kind: "hit"; by: string; to: string; died: boolean; title: string }
   | { kind: "text"; text: string };
@@ -29,6 +30,7 @@ export function periodsOf(lines: string[]): Period[] {
     let m: RegExpMatchArray | null;
     if (line.startsWith("게임을 시작합니다") || line.startsWith("역할이 정해졌습니다")) continue;
     if ((m = line.match(/^(\d+일차 밤): (.+) 님이 사망했습니다\. \((.+)\)$/))) at(true, m[1]).steps.push({ kind: "dead", who: m[2], reveal: m[3] });
+    else if ((m = line.match(/^(\d+일차 밤): (.+) 님이 (.+) 님을 지목했습니다\.$/))) at(true, m[1]).steps.push({ kind: "point", by: m[2], who: m[3] });
     else if ((m = line.match(/^(\d+일차 밤): 아무도 죽지 않았습니다\.$/))) at(true, m[1]).steps.push({ kind: "text", text: "조용했다" });
     else if ((m = line.match(/^시장 선거: (.+)$/))) at(false, "시장 선거").steps.push({ kind: "votes", ballots: ballots(m[1]), tally: {} });
     else if ((m = line.match(/^(\d+일차) 투표: (.+)$/))) at(false, `${m[1]} 낮`).steps.push({ kind: "votes", ballots: ballots(m[2]), tally: {} });

@@ -12,16 +12,18 @@ const p = periodsOf([
   "득표: 세찌 2.1표, 하나 1표",
   "세찌 님이 추방당했습니다. (선동꾼(임포스터))",
   "2일차 밤: 아무도 죽지 않았습니다.",
+  "2일차 밤: 하나 님이 두리 님을 지목했습니다.",
   "모르는 줄",
 ]);
 assert.deepEqual(p.map((x) => [x.label, x.night, x.steps.map((s) => s.kind).join()]), [
   ["시장 선거", false, "votes,mayor"],
   ["1일차 밤", true, "dead"],
   ["1일차 낮", false, "votes,out"],
-  ["2일차 밤", true, "text,text"],
+  ["2일차 밤", true, "text,point,text"],
 ]);
 assert.deepEqual(p[0].steps[0], { kind: "votes", ballots: [{ by: "하나", to: "두리" }, { by: "두리", to: null }], tally: {} });
 assert.deepEqual(p[1].steps[0], { kind: "dead", who: "여울", reveal: "경찰관(시민)" });
 const votes = p[2].steps[0];
 assert.ok(votes.kind === "votes" && votes.tally["세찌"] === 2.1 && votes.tally["하나"] === 1);
+assert.deepEqual(p[3].steps[1], { kind: "point", by: "하나", who: "두리" });
 console.log("timeline ok");
