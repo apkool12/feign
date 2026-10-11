@@ -362,7 +362,8 @@ export function Model({ file, paint, clip, face = "default", overhead, held, doo
     if (shown.current?.scene !== scene || shown.current.face !== want) {
       shown.current = { scene, face: want };
       scene.traverse((o) => {
-        if (o.name.startsWith("face-")) o.visible = o.name === `face-${want}` || o.name.startsWith(`face-${want}-`);
+        // 표정 노드만 본다. 그 밑의 메시 조각도 이름이 face-로 시작할 수 있어(졸린 표정) 부모가 표정 노드면 건드리지 않는다.
+        if (o.name.startsWith("face-") && !o.parent?.name.startsWith("face-")) o.visible = o.name === `face-${want}` || o.name.startsWith(`face-${want}-`);
       });
     }
     const requested = clip.current;
