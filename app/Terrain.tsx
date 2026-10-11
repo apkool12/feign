@@ -5,6 +5,7 @@
 import { useFrame, useLoader } from "@react-three/fiber";
 import { Suspense, useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
+import { sky } from "./Dusk";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 const RAD = Math.PI / 180;
@@ -466,7 +467,7 @@ const TOON = `
   const vec3 SHALLOW = vec3(0.63, 0.88, 0.94);
   const vec3 FOAM = vec3(0.97, 0.99, 1.0);
   float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-  vec3 dusk(vec3 c) { return mix(c, c * vec3(0.1, 0.17, 0.4), uNight * 0.9); } // 밤에는 짙은 남청, 거품은 달빛만큼만
+  vec3 dusk(vec3 c) { return mix(c, c * vec3(0.05, 0.09, 0.24), uNight * 0.96); } // 밤에는 주변 땅보다 어두운 남청, 거품은 달빛만큼만
   // 경계가 계단지지 않게 한 픽셀 폭으로만 풀어 주는 step
   float cut(float edge, float x) { float w = fwidth(x); return smoothstep(edge - w, edge + w, x); }
   // 붓으로 그은 듯한 길쭉한 흰 줄. 칸(p의 정수부)마다 keep 확률로 하나씩, p.y 방향으로 길고 양끝이 가늘다.
@@ -937,6 +938,7 @@ function paintRidge(layer: number, p: Plan) {
 }
 
 const DAYLIGHT = new THREE.Color("#ffffff");
+const SUNSET = new THREE.Color("#ffb08a"); // 노을이 지는 동안 산이 물드는 색
 const MOONLIGHT = new THREE.Color("#2b3966"); // 밤에는 그림 전체를 남색으로 물들인다
 const CLOUDS = Array.from({ length: 8 }, (_, i) => ({ deg: i * 45 + (i % 3) * 13, far: 118 + (i % 4) * 16, high: 30 + ((i * 7) % 5) * 7, size: 5 + (i % 3) * 2 }));
 
@@ -957,8 +959,7 @@ function Mountains({ p, night }: { p: Plan; night: boolean }) {
   useEffect(() => () => layers.forEach((layer) => (layer.material.map?.dispose(), layer.material.dispose())), [layers]);
   const clouds = useRef<THREE.Group>(null);
   useFrame((_, dt) => {
-    const k = 1 - Math.exp(-dt * 3);
-    for (const material of [tint, ...layers.map((layer) => layer.material)]) material.color.lerp(night ? MOONLIGHT : DAYLIGHT, k);
+    for (const material of [tint, ...layers.map((layer) => layer.material)]) material.color.lerpColors(DAYLIGHT, MOONLIGHT, sky.night).lerp(SUNSET, sky.glow * 0.55);
     if (clouds.current && !CALM) clouds.current.rotation.y += dt * 0.004;
   });
   return (
@@ -1087,7 +1088,7 @@ function ForestFloor({ p }: { p: Plan }) {
 export function Terrain({ n, p, night }: { n: number; p: Plan; night: boolean }) {
   const dark = useRef(night ? 1 : 0);
   useFrame((state, dt) => {
-    dark.current += ((night ? 1 : 0) - dark.current) * (1 - Math.exp(-dt * 3));
+    dark.current = sky.night;
     for (const water of WATERS) {
       water.uniforms.uTime.value = state.clock.elapsedTime * (CALM ? 0.15 : 1);
       water.uniforms.uNight.value = dark.current;

@@ -9,6 +9,7 @@ import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { sky } from "./Dusk";
 import { useFx } from "./fx";
 
 // 명암 세 단계: 그늘, 중간, 볕
@@ -49,7 +50,7 @@ const GRADE = {
       gl_FragColor = vec4(mix(vec3(l), c, sat) * tint, 1.0);
     }`,
 };
-const TINT = { day: new THREE.Color(1.05, 1.0, 0.93), night: new THREE.Color(0.84, 0.93, 1.14) };
+const TINT = { day: new THREE.Color(1.05, 1.0, 0.93), night: new THREE.Color(0.84, 0.93, 1.14), glow: new THREE.Color(1.14, 0.97, 0.86) };
 
 // 캔버스 안에 둔다. 켜져 있으면 이 부품이 화면을 대신 그린다.
 export function Post({ night }: { night: boolean }) {
@@ -72,12 +73,12 @@ export function Post({ night }: { night: boolean }) {
   }, [made, size, viewport.dpr]);
   useFrame((_, dt) => {
     if (!on) return gl.render(scene, camera);
-    const k = 1 - Math.exp(-dt * 3);
+    // 하늘(sky)을 따라 낮 → 노을 → 밤으로 넘어간다
     const u = made.grade.uniforms;
-    (u.tint.value as THREE.Color).lerp(TINT[night ? "night" : "day"], k);
-    u.sat.value += ((night ? 0.95 : 1.12) - u.sat.value) * k;
+    (u.tint.value as THREE.Color).lerpColors(TINT.day, TINT.night, sky.night).lerp(TINT.glow, sky.glow * 0.7);
+    u.sat.value = THREE.MathUtils.lerp(1.12, 0.95, sky.night);
     // 번짐은 밤의 불과 창문에만. 낮에는 끈다(볕 받은 흰 면이 뿌예진다).
-    made.bloom.strength += ((night ? 0.4 : 0) - made.bloom.strength) * k;
+    made.bloom.strength = 0.4 * sky.night;
     made.bloom.enabled = made.bloom.strength > 0.02;
     made.composer.render(dt);
   }, 1);
@@ -96,7 +97,7 @@ export function Veil({ night }: { night: boolean }) {
         position: "absolute",
         inset: 0,
         pointerEvents: "none",
-        transition: "background 1s",
+        transition: "background 2.5s",
         background: `radial-gradient(ellipse at 50% 52%, transparent 55%, ${edge} 120%)`,
         mixBlendMode: "multiply",
       }}
