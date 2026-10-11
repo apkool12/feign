@@ -169,7 +169,7 @@ export type Scene =
 // 원작에서 공개되는 것만 담는다: 누가 죽었고 어떤 역할로 드러났는지, 폭탄으로 죽었는지(집이 터진다),
 // 밀고자가 광장에 나와 누구를 지목했는지(알아낸 역할은 밀고자만 본다). 그 밖의 살해 수단은 담지 않는다.
 export type Dawn =
-  | { kind: "death"; who: string; reveal: string; blast: boolean } // reveal은 players[].label과 같은 글
+  | { kind: "death"; who: string; reveal: string; blast: boolean; bolt: boolean } // blast는 폭탄, bolt는 마법사의 번개(모두가 본다). reveal은 players[].label과 같은 글
   | { kind: "snitch"; by: string; who: string };
 
 export type HitKind = "curse" | "sk" | "bomb" | "kill" | "thief" | "haunt";
@@ -843,12 +843,13 @@ function resolveNight(room: Room, rng: Rng) {
   const hidden = new Set(hits.filter((h) => h.kind === "sk" || h.kind === "thief").map((h) => h.victim));
   // 폭탄은 밤이 끝나기 직전에 집이 터지므로 먼저, 나머지는 발동 순서대로 (아침에 집에서 나오다 쓰러진다)
   const blasted = new Set(hits.filter((h) => h.kind === "bomb").map((h) => h.victim));
+  const struck = new Set(hits.filter((h) => h.kind === "curse").map((h) => h.victim)); // 번개도 모두가 본다
   const dead = [...new Set(hits.map((h) => h.victim))].filter((p) => dying.has(p));
   for (const p of [...dead.filter((p) => blasted.has(p)), ...dead.filter((p) => !blasted.has(p))]) {
     die(p, hidden.has(p));
     p.will = true;
     announce(room, `${night}: ${p.name} 님이 사망했습니다. (${p.reveal})`);
-    room.dawn.push({ kind: "death", who: p.id, reveal: p.reveal!, blast: blasted.has(p) });
+    room.dawn.push({ kind: "death", who: p.id, reveal: p.reveal!, blast: blasted.has(p), bolt: !blasted.has(p) && struck.has(p) });
   }
   if (!dying.size) announce(room, `${night}: 아무도 죽지 않았습니다.`);
   for (const [p, t] of pointed) {
@@ -1057,6 +1058,13 @@ export function view(room: Room, me: Player, now = Date.now()) {
     setup: room.setup,
     remaining: room.deadline === null ? null : Math.max(0, room.deadline - now),
     pending: room.phase === "day" ? pending(room).length : 0, // 밤에는 누가 골랐는지가 곧 역할이라 알리지 않는다
+    // 밤: 마법사의 차례가 지나면 번개가 떨어진 집을 모두가 본다. 맞혔으면 대상의 집, 틀렸으면 마법사 자신의 집.
+    bolts:
+      night && room.turn > turns(room).findIndex((t) => t.includes("sorcerer"))
+        ? room.players
+            .filter((p) => p.alive && p.role === "sorcerer" && p.act?.mode === "ability")
+            .map((p) => (p.act!.guess === byId(p.act!.target)?.role ? p.act!.target! : p.id))
+        : [],
     // 밤: 지금 누구 차례인가
     turn: night
       ? {

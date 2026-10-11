@@ -301,6 +301,16 @@ for (let n = 4; n <= 10; n++) {
 
 // 마법사: 맞히면 상대가(치료 불가), 틀리면 자신이 죽는다
 {
+  {
+    // 마법사의 차례가 지나면 번개 맞은 집이 모두에게 보인다 (틀리면 자기 집)
+    const b = room("sorcerer", "imp:cleaner", "doctor", "lookout");
+    assert.equal(act(b, b.players[0], "ability", "p2", "doctor"), null);
+    assert.deepEqual(view(b, b.players[3]).bolts, []);
+    pass(b);
+    assert.deepEqual(view(b, b.players[3]).bolts, ["p2"]);
+    b.players[0].act!.guess = "lookout";
+    assert.deepEqual(view(b, b.players[3]).bolts, ["p0"]);
+  }
   const r = room("sorcerer", "imp:cleaner", "doctor", "lookout");
   assert.ok(act(r, r.players[0], "ability", "p1")); // 역할을 골라야 한다
   night(r, { 0: "ability p1 cleaner", 2: "ability p1" });
@@ -672,7 +682,7 @@ for (let n = 4; n <= 10; n++) {
   const dawns = r.players.map((p) => JSON.stringify(view(r, p).dawn));
   assert.ok(dawns.every((d) => d === dawns[0])); // 좌석마다 같은 내용
   const dawn = view(r, r.players[2]).dawn;
-  assert.deepEqual(dawn[0], { kind: "death", who: "p3", reveal: "감시자(시민)", blast: false }); // 죽음이 먼저
+  assert.deepEqual(dawn[0], { kind: "death", who: "p3", reveal: "감시자(시민)", blast: false, bolt: false }); // 죽음이 먼저
   // 같은 순서의 역할끼리는 무작위라 지목 순서는 정해져 있지 않다. 가짜 밀고자도 똑같이 지목한다.
   assert.deepEqual(new Set(dawn.slice(1).map((d) => JSON.stringify(d))), new Set(['{"kind":"snitch","by":"p1","who":"p0"}', '{"kind":"snitch","by":"p4","who":"p2"}']));
   assert.ok(!dawns[0].includes("cleaner") && !dawns[0].includes("청소부")); // 알아낸 역할은 새지 않는다
@@ -693,8 +703,8 @@ for (let n = 4; n <= 10; n++) {
   advance(r, seq());
   night(r, { 0: "detonate", 1: "kill p4" });
   assert.deepEqual(r.dawn, [
-    { kind: "death", who: "p3", reveal: "감시자(시민)", blast: true },
-    { kind: "death", who: "p4", reveal: "추적자(시민)", blast: false },
+    { kind: "death", who: "p3", reveal: "감시자(시민)", blast: true, bolt: false },
+    { kind: "death", who: "p4", reveal: "추적자(시민)", blast: false, bolt: false },
   ]);
 }
 {
