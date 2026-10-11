@@ -671,9 +671,9 @@ const HOWTO = ["밤: 한 집을 골라 찾아간다", "낮: 모여서 누가 수
 // 서버의 거절 문구를 메뉴에 맞게 줄인다
 const SHORT = [
   ["없는 방", "그런 방 없어요"],
-  ["이미 시작", "벌써 시작했어요"],
+  ["이미 시작", "이미 시작했어요"],
   ["이미 있는 닉네임", "그 이름은 이미 있어요"],
-  ["닉네임을", "이름부터 정해요"],
+  ["닉네임을", "이름을 정해 주세요"],
 ];
 const short = (msg: string) => SHORT.find(([k]) => msg.startsWith(k))?.[1] ?? msg;
 
@@ -751,7 +751,7 @@ function Menu({ online, error, prefs, update, invite, onJoin }: MenuProps) {
           <span className="gl">{ICON.pen}</span>
         </button>
         <button className="btn" onClick={() => setOpen("custom")}>
-          꾸미기
+          커스터마이징
         </button>
       </div>
       <button className="ib gear" aria-label="설정" onClick={() => setOpen("settings")}>
@@ -762,7 +762,7 @@ function Menu({ online, error, prefs, update, invite, onJoin }: MenuProps) {
       {open && (
         <Modal
           key={open}
-          label={{ join: "참가", how: "게임 방법", custom: "꾸미기", settings: "설정", name: "이름" }[open]}
+          label={{ join: "참가", how: "게임 방법", custom: "커스터마이징", settings: "설정", name: "이름" }[open]}
           width={{ join: 440, how: 960, custom: 1000, settings: 400, name: 380 }[open]}
           onClose={() => {
             setOpen(null);
@@ -797,7 +797,7 @@ function Menu({ online, error, prefs, update, invite, onJoin }: MenuProps) {
               </button>
               {prefs.last && (
                 <button type="button" className="btn" disabled={!online} onClick={() => go(prefs.last)}>
-                  방금 그 방 {prefs.last}
+                  마지막 접속: {prefs.last}
                 </button>
               )}
             </form>
@@ -1037,15 +1037,15 @@ function Game({ view, due, positions, send, leave }: GameProps) {
     !night || !me.alive || me.role === "survivor" || me.modes.includes("ability")
       ? ""
       : me.uses === 0
-        ? "능력을 다 썼다"
+        ? "능력을 다 사용했습니다"
         : "";
   const hint =
     playing && !me.alive
       ? me.will
-        ? "죽었다 · 낮에 유언 한마디"
-        : "죽었다"
+        ? "죽었습니다. 유언을 남겨 주세요"
+        : "죽었습니다"
       : me.both
-          ? "혼자 남았다 · 살해와 능력 둘 다"
+          ? "살해와 능력 둘 다 가능합니다"
           : idle;
 
   // 밤에 집을 골랐을 때. 혼자 남은 임포스터는 살해 대상과 능력 대상을 따로 고른다.
@@ -1090,7 +1090,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
       !p.connected && "끊김",
       p.doing,
       p.provoked && "+2표",
-      night && me.blocked === p.id && (me.role === "doctor" ? "어제 치료" : "어제 막음"),
+      night && me.blocked === p.id && (me.role === "doctor" ? "어제 치료했습니다" : "어제 막았습니다"),
     ]
       .filter(Boolean)
       .join(" · ");
@@ -1177,10 +1177,10 @@ function Game({ view, due, positions, send, leave }: GameProps) {
   const lobbyBtns = phase === "lobby" && (
     <>
       <button className="btn" onClick={() => setOpen("custom")}>
-        꾸미기
+        커스터마이징
       </button>
       <button className="btn" onClick={() => setOpen("setup")}>
-        판 짜기
+        게임 설정
       </button>
       <button
         className="btn"
@@ -1203,8 +1203,8 @@ function Game({ view, due, positions, send, leave }: GameProps) {
   const modal = open && (
     <Modal
       key={open}
-      label={{ info: "마을 사람과 기록", menu: "설정", custom: "꾸미기", setup: "판 짜기", history: "기록" }[open]}
-      width={{ info: 860, menu: 400, custom: 1000, setup: 760, history: 640 }[open]}
+      label={{ info: "마을 사람과 기록", menu: "설정", custom: "커스터마이징", setup: "게임 설정", history: "기록" }[open]}
+      width={{ info: 860, menu: 440, custom: 1000, setup: 760, history: 640 }[open]}
       onClose={() => setOpen(null)}
     >
       {open === "info" && (
@@ -1638,9 +1638,15 @@ function Voice({ people }: { people: { name: string; color: string }[] }) {
         </div>
       ))}
       <div className="row">
-        <span className="gl w-12">{ICON.mic}</span>
-        <b className="d flex-1 text-lg font-normal">V를 누르는 동안만 말하기</b>
-        <button role="switch" aria-checked={v.ptt} aria-label="V를 누르는 동안만 말하기" className="sw" onClick={() => voice.set({ ptt: !v.ptt })} />
+        {/* 말하는 방식: 열린 마이크(늘 나감) / 눌러서 말하기(V를 누르는 동안만) */}
+        <div className="flex min-w-0 flex-1 gap-2" role="group" aria-label="말하는 방식">
+          <button className="btn min-w-0 flex-1 !px-2 whitespace-nowrap" aria-pressed={!v.ptt} onClick={() => voice.set({ ptt: false })}>
+            열린 마이크
+          </button>
+          <button className="btn min-w-0 flex-1 !px-2 whitespace-nowrap" aria-pressed={v.ptt} title="V를 누르는 동안만 말합니다" onClick={() => voice.set({ ptt: true })}>
+            눌러서 말하기
+          </button>
+        </div>
       </div>
       <div className="row">
         <span className="gl w-12">{ICON.fx}</span>
@@ -1758,7 +1764,7 @@ function StepRow({ step, colors }: { step: Step; colors: Colors }) {
     return (
       <li title={step.title}>
         <Face name={step.to} colors={colors} />
-        <span className="gl" title={step.died ? "사망" : "살았다"}>
+        <span className="gl" title={step.died ? "사망했습니다" : "살았습니다"}>
           {step.died ? ICON.grave : ICON.shield}
         </span>
       </li>
@@ -1787,7 +1793,7 @@ function StepRow({ step, colors }: { step: Step; colors: Colors }) {
 
 // 지난 일: 밤과 낮이 번갈아 놓이는 칸
 function Timeline({ periods, colors }: { periods: Period[]; colors: Colors }) {
-  if (!periods.length) return <p className="text-[15px] opacity-60">아직 없다</p>;
+  if (!periods.length) return <p className="text-[15px] opacity-60">아직 없습니다</p>;
   return (
     <ol className="flex flex-col gap-2">
       {periods.map((p, i) => (
@@ -2032,7 +2038,7 @@ function SetupBoard({ view, isHost, send }: { view: View; isHost: boolean; send:
             ))}
           </div>
           <button className="btn self-start" disabled={!isHost} aria-pressed={setup.calm} onClick={() => change({ calm: !setup.calm })}>
-            첫 밤은 아무도 안 죽기
+            첫날 밤 살인 금지
           </button>
         </div>
       )}
