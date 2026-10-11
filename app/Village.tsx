@@ -662,6 +662,14 @@ const TINT = new THREE.Color();
 
 // 캐릭터의 생김새. ghost면 죽은 뒤의 내 모습(나에게만 보인다)인 유령을 그린다.
 export function Body({ seat, color, clip, ghost = false }: { seat: Seat; color: string; clip: RefObject<string>; ghost?: boolean }) {
+  // 걷는 동작은 다리를 휘젓고 몸을 숙여서 발끝이 서 있을 때보다 더 내려간다. 걷는 동안만 조금 더 띄운다.
+  const feet = useRef<THREE.Group>(null);
+  useFrame((_, dt) => {
+    const g = feet.current;
+    if (!g) return;
+    const to = clip.current === "walk" || clip.current === "sneak" ? 0.24 : 0.13;
+    g.position.y += (to - g.position.y) * Math.min(1, dt * 12);
+  });
   if (ghost)
     return (
       <>
@@ -705,13 +713,16 @@ export function Body({ seat, color, clip, ghost = false }: { seat: Seat; color: 
     <>
       {/* 캐릭터 모델이 늦게 와도 이름표는 먼저 보인다 */}
       <Suspense fallback={null}>
-        {seat.skin === "blob" ? (
-          blob
-        ) : (
-          <Fallback key={seat.skin} fallback={blob}>
-            <Model file={`skins/${seat.skin}`} {...look} />
-          </Fallback>
-        )}
+        {/* 발이 길과 광장의 덧칠(땅보다 조금 높다)에 묻히지 않게 살짝 띄운다 */}
+        <group ref={feet} position-y={0.13}>
+          {seat.skin === "blob" ? (
+            blob
+          ) : (
+            <Fallback key={seat.skin} fallback={blob}>
+              <Model file={`skins/${seat.skin}`} {...look} />
+            </Fallback>
+          )}
+        </group>
       </Suspense>
       {seat.name && <Label title={seat.name} y={1.45} size={0.75} />}
       <Bubble id={seat.id} y={1.8} />
