@@ -187,6 +187,16 @@ button:disabled {
   stroke-linejoin: round;
 }
 
+/* 왼쪽 위: 이번 판에 들어간 역할 */
+.roster {
+  position: absolute;
+  left: 16px;
+  top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  max-width: min(34vw, 420px);
+}
 .clock {
   display: flex;
   align-items: center;
@@ -814,8 +824,37 @@ dialog.sheet::backdrop {
 .memo li {
   padding: 6px 10px;
   background: rgb(255 255 255 / 0.5);
-  border-left: 5px solid var(--sun2);
-  border-radius: 4px 10px 10px 4px;
+  border-radius: 10px;
+}
+
+/* 스크롤 막대: 종이 홈에 먹색 알약 */
+::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+::-webkit-scrollbar-track {
+  background: rgb(43 33 24 / 0.12);
+  border-radius: 999px;
+  margin: 4px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--ink);
+  border: 3px solid transparent; /* 홈 안쪽으로 들여 보이게 */
+  background-clip: padding-box;
+  border-radius: 999px;
+  min-height: 36px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: #4a3a2b;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--ink) rgb(43 33 24 / 0.12);
+  }
 }
 
 /* 메인 메뉴. 뒤에 마을이 돌고, 살짝 눌러서 로고와 단추가 읽히게 한다 */
@@ -966,3 +1005,60 @@ dialog.sheet::backdrop {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+
+/* 어젯밤 회상 */
+.replaying > :not(.keep) {
+  display: none;
+}
+canvas {
+  transition: filter 0.6s;
+}
+:has(> .flash) canvas {
+  filter: saturate(0.82);
+}
+.flash {
+  position: absolute;
+  inset: 0;
+  z-index: 11;
+  pointer-events: none;
+}
+.flash-tag {
+  position: absolute;
+  top: 84px;
+  left: 50%;
+  translate: -50%;
+}
+.flash-sum {
+  position: absolute;
+  bottom: 96px;
+  left: 50%;
+  translate: -50%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 20px;
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-size: 20px;
+  white-space: nowrap;
+  animation: flash-in 0.2s ease-out;
+}
+.flash-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.flash-who i {
+  width: 26px;
+  height: 26px;
+  border-radius: 50% 50% 46% 46%;
+  border: 3px solid var(--ink);
+}
+@keyframes flash-in {
+  from {
+    opacity: 0;
+    scale: 0.9;
+  }
+}
+
+
+

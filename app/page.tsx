@@ -9,6 +9,7 @@ import { said, typing } from "./talk";
 import { periodsOf } from "./timeline";
 import type { Period, Step } from "./timeline";
 import { ambience } from "./sound";
+import { flashOf, stage, type Flash } from "./stage";
 import type { Positions, Seat } from "./Village";
 import { DAY_CHOICES, HATS, HOUSES, INSANE, MAX_PLAYERS, MIN_PLAYERS, NIGHT_CHOICES, POOL, ROLES, SKINS, SKIP, TEAM_NAME } from "../game";
 import type { Hat, HistoryEntry, House, Mode, Role, Skin, Slot, Team, View } from "../game";
@@ -572,9 +573,23 @@ function Game({ view, due, positions, send, leave }: GameProps) {
   }, [me.role]);
   useEffect(() => {
     if (!reveal) return;
+    stage.hold(8000); // 역할 카드가 화면을 가리는 동안 해 질 녘 연출은 기다린다
     const timer = setTimeout(() => setReveal(false), 8000);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      stage.release();
+    };
   }, [reveal]);
+
+  // 밤이 끝나면 어젯밤 본 것(감시·추적)을 마을 안에서 다시 보여 준다
+  const flash = flashOf(me.scenes);
+  // 마을이 낮을 한 순간도 먼저 보지 않게, 페이즈가 바뀐 그 렌더에서 바로 정한다
+  const [before, setBefore] = useState(phase);
+  const [replay, setReplay] = useState<Flash | null>(null);
+  if (before !== phase) {
+    setBefore(phase);
+    setReplay(before === "night" && phase === "day" && !asList ? flash : null);
+  }
 
   // Tab: 마을 사람과 기록, Enter: 말하기
   useEffect(() => {
@@ -601,6 +616,9 @@ function Game({ view, due, positions, send, leave }: GameProps) {
   const targeted: Mode[] = me.modes.filter((m) => m === "kill" || m === "ability");
   const [wanted, setWanted] = useState<Mode>("kill");
   const mode = targeted.includes(wanted) ? wanted : targeted[0];
+  // 쉬기처럼 집을 고르지 않는 행동을 고른 날. 그날은 집을 고르는 단추를 눌린 모양으로 두지 않는다.
+  const [idleDay, setIdleDay] = useState<number | null>(() => (me.act && !targeted.includes(me.act.mode) ? view.day : null));
+  const resting = idleDay === view.day;
   const [guess, setGuess] = useState<Role>("doctor");
   const role = me.role ? ROLES[me.role] : null;
   const uses = me.uses === null ? "" : ` ${me.uses}`;
@@ -684,8 +702,12 @@ function Game({ view, due, positions, send, leave }: GameProps) {
       <>
         {me.modes.map((m) => {
           const aimed = m === "kill" || m === "ability";
-          const pressed = aimed ? m === mode : me.act?.mode === m;
-          const choose = () => (aimed ? setWanted(m) : send({ t: "act", mode: m }));
+          const pressed = aimed ? !resting && m === mode : resting && me.act?.mode === m;
+          const choose = () => {
+            setIdleDay(aimed ? null : view.day);
+            if (aimed) setWanted(m);
+            else send({ t: "act", mode: m });
+          };
           return round ? (
             <button key={m} aria-pressed={pressed} onClick={choose} className="round out">
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -747,7 +769,20 @@ function Game({ view, due, positions, send, leave }: GameProps) {
       width={{ info: 860, menu: 400, custom: 1000, setup: 760, history: 640 }[open]}
       onClose={() => setOpen(null)}
     >
-      {open === "info" && <Info view={view} colors={colorOf} />}
+      {open === "info" && (
+        <Info
+          view={view}
+          colors={colorOf}
+          onReplay={
+            flash && phase === "day" && !asList
+              ? () => {
+                  setOpen(null);
+                  setReplay(flash);
+                }
+              : undefined
+          }
+        />
+      )}
       {open === "custom" && (
         <Custom
           skin={players.find((p) => p.id === me.id)!.skin}
@@ -896,11 +931,14 @@ function Game({ view, due, positions, send, leave }: GameProps) {
         iconRole={night && me.alive && (me.act?.mode === "ability" || me.act?.extra) ? me.role : null}
         shield={night && me.act?.mode === "armor"}
         positions={positions}
+        replay={replay}
+        onReplayEnd={() => setReplay(null)}
         onPick={pickSeat}
         onMove={(x, z) => send({ t: "move", x, z })}
       />
-      <div className="pointer-events-none absolute inset-0 *:pointer-events-auto">
-        <div className="!pointer-events-none absolute inset-x-0 top-0 flex flex-col items-center gap-2">
+      {/* 회상이 도는 동안은 시계와 대화만 남긴다 */}
+      <div className={`pointer-events-none absolute inset-0 *:pointer-events-auto ${replay ? "replaying" : ""}`}>
+        <div className="keep !pointer-events-none absolute inset-x-0 top-0 flex flex-col items-center gap-2">
           {phase !== "ended" && (
             <div className="clock paper">
               {playing && <div className={night ? "moon" : "sun"} aria-hidden />}
@@ -910,7 +948,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
               </div>
             </div>
           )}
-          {playing && brief.length > 0 && (
+          {playing && !replay && brief.length > 0 && (
             <section key={phaseKey} aria-live="polite" className="toast paper max-w-[min(36rem,90vw)]">
               {brief.map((line, i) => (
                 <p key={i}>{line}</p>
@@ -918,6 +956,24 @@ function Game({ view, due, positions, send, leave }: GameProps) {
             </section>
           )}
         </div>
+
+        {playing && !replay && view.roster.length > 0 && (
+          <ul className="roster" aria-label="이번 판 역할">
+            {(() => {
+              // 죽어서 드러난 역할은 한 장씩 꺼 둔다
+              const gone = players.filter((p) => !p.alive).map((p) => roleOf(p.label));
+              return view.roster.map((r, i) => {
+                const at = gone.indexOf(r);
+                if (at >= 0) gone.splice(at, 1);
+                return (
+                  <li key={i}>
+                    <RoleTile role={r} off={at >= 0} />
+                  </li>
+                );
+              });
+            })()}
+          </ul>
+        )}
 
         <div className="absolute right-4 top-3.5 flex gap-2.5">
           <button className="ib" aria-label="마을 사람과 기록 (Tab)" onClick={() => setOpen("info")}>
@@ -928,7 +984,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
           </button>
         </div>
 
-        <div className="absolute bottom-4 left-4 w-[360px] max-w-[45vw]">
+        <div className="keep absolute bottom-4 left-4 w-[360px] max-w-[45vw]">
           <Chat view={view} send={send} colors={colorOf} hud />
         </div>
 
@@ -1214,7 +1270,7 @@ function Timeline({ periods, colors }: { periods: Period[]; colors: Colors }) {
 }
 
 // Tab 창: 늘 띄워 두지 않는 정보를 한곳에 모은다
-function Info({ view, colors }: { view: View; colors: Colors }) {
+function Info({ view, colors, onReplay }: { view: View; colors: Colors; onReplay?: () => void }) {
   const { me, phase } = view;
   const playing = phase === "night" || phase === "day";
   const role = me.role ? ROLES[me.role] : null;
@@ -1281,6 +1337,11 @@ function Info({ view, colors }: { view: View; colors: Colors }) {
                 <li key={i}>{line}</li>
               ))}
             </ol>
+            {onReplay && (
+              <button className="btn mt-2" onClick={onReplay}>
+                어젯밤 다시 보기
+              </button>
+            )}
             <div className="hr" />
           </>
         )}
