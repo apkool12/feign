@@ -40,5 +40,9 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# 원작 게임의 역할 그림 (저작권이 있어 저장소에 올리지 않는다)
-/public/roles/
+# 원작자가 있는 캐릭터를 본뜬 모델과 그 원본 (저장소에 올리지 않는다)
+/public/models/skins/
+/assets/
+/public/models/thumbs/skin-chiikawa.png
+/public/models/thumbs/skin-hachiware.png
+/public/models/thumbs/skin-usagi.png
