@@ -14,7 +14,7 @@
 // - 중립: 연쇄 살인범·도둑은 무작위 공격, 폭파범은 두 집에 설치하면(4명 이하면 한 집) 터뜨림, 마법사는 밤마다 50%로
 //   이번 판 역할 중 하나를 찍어 저주(대부분 틀려 죽는다), 무속인은 양초만 두고 추방을 노리지 않음, 생존자는 40%로 갑옷.
 // - 의사·경찰관·조사 역할은 대상을 무작위로 고른다. 시장 선거도 무작위.
-import { act, advance, newPlayer, newRoom, pick, POOL, SKIP, start, view } from "./game.ts";
+import { act, advance, turnOf, newPlayer, newRoom, pick, POOL, SKIP, start, view } from "./game.ts";
 import type { Rng, Role, Room, Seen, Slot, Team } from "./game.ts";
 
 const KILLER: Role[] = ["serialKiller", "bomber", "sorcerer", "thief"];
@@ -94,6 +94,7 @@ function play(n: number, rng: Rng, slots: Slot[] | null, calm: boolean): Room {
       }
     } else {
       for (const p of alive) {
+        room.turn = turnOf(room, p);
         const v = view(room, p);
         const { modes, role } = v.me;
         const others = ids.filter((id) => id !== p.id);

@@ -38,6 +38,7 @@ export type Hat = (typeof HATS)[number];
 export const MIN_PLAYERS = 4;
 export const MAX_PLAYERS = 10;
 export const ELECTION_MS = 60_000;
+export const TURN_MS = 15_000; // 밤에 역할마다 돌아오는 차례의 길이
 export const DUSK_MS = 6_000; // 밤마다 더 주는 시간 (집으로 돌아가는 연출 동안은 집을 누를 수 없다)
 export const EXILE_MS = 8_000; // 추방 연출이 도는 밤에 더 주는 시간
 export const FIRST_NIGHT_MS = 30_000; // 1일차 밤에만 더 주는 시간 (역할을 읽을 시간)
@@ -53,12 +54,12 @@ export const ROLES: Record<Role, { name: string; action: string; desc: string }>
   doctor: {
     name: "의사",
     action: "치료",
-    desc: "밤에 한 명을 치료해 그날 밤 공격받아도 살려 냅니다. 자신과, 어젯밤 치료한 사람은 고를 수 없습니다.",
+    desc: "밤에 한 명을 치료해 그날 밤 공격받아도 살려 냅니다. 자신도 치료할 수 있지만, 어젯밤 치료한 사람은 고를 수 없습니다.",
   },
   blocker: {
     name: "경찰관",
     action: "외출 통제",
-    desc: "밤에 한 명이 집 밖으로 못 나가게 막고, 나가려 했는지 알아냅니다. 이틀 연속으로는 쓸 수 없습니다.",
+    desc: "밤에 한 명이 집 밖으로 못 나가게 막고, 나가려 했는지 알아냅니다. 어젯밤 막은 사람은 고를 수 없습니다.",
   },
   lookout: { name: "감시자", action: "감시", desc: "밤에 한 명의 집을 지켜보고 누가 찾아왔는지 알아냅니다." },
   investigator: {
@@ -239,6 +240,7 @@ export interface Room {
   players: Player[];
   setup: Setup;
   mayor: string | null;
+  turn: number; // 밤: 지금 몇 번째 차례인가
   roster: Role[]; // 이번 판에 들어간 역할들 (누가 무엇인지는 알 수 없게 정렬해 둔다)
   log: string[];
   news: string[]; // log 중 방금 정산에서 생긴 것
@@ -260,6 +262,7 @@ export function newRoom(code: string): Room {
     players: [],
     setup: { auto: true, slots: [], night: 90, day: 180, calm: false },
     mayor: null,
+    turn: 0,
     roster: [],
     log: [],
     news: [],
@@ -442,13 +445,40 @@ export function start(room: Room) {
   announce(room, "게임을 시작합니다. 먼저 시장을 뽑습니다. 역할은 선거가 끝나면 정해집니다.");
 }
 
-// 오늘 밤 고를 수 있는 행동. 경찰관은 이틀 연속으로 능력을 쓸 수 없다.
+// 밤의 차례. 발동 순서대로 한 차례씩 돌고, 자기 차례에만 행동을 고른다 (정산은 밤이 끝날 때 한꺼번에).
+// 임포스터 편은 어떤 역할이든 임포스터 차례에 살해와 능력을 고른다.
+const TURNS: (Role | "imposter")[][] = [
+  ["haunter"],
+  ["sorcerer"],
+  ["serialKiller"],
+  ["blocker"],
+  ["trapper"],
+  ["bomber"],
+  ["imposter"],
+  ["thief"],
+  ["doctor"],
+  ["survivor", "provoker"],
+  ["investigator", "snitch"],
+  ["lookout", "tracker"],
+];
+// 이번 판에 도는 차례들. 판에 들어간 역할 목록만으로 정한다 — 누가 죽었든 누가 임포스터든 차례는 그대로 돌아서, 차례의 유무와 길이로 새는 것이 없다.
+const turns = (room: Room) => TURNS.filter((t) => t.includes("imposter") || t.some((r) => room.roster.includes(r as Role)));
+// p가 고르는 차례 (없으면 -1)
+export const turnOf = (room: Room, p: Player) => turns(room).findIndex((t) => t.includes(p.team === "imposter" ? "imposter" : p.role));
+// 다음 차례로 넘긴다. 마지막 차례였으면 false (밤을 정산할 때다)
+export function pass(room: Room): boolean {
+  if (room.phase !== "night" || room.turn >= turns(room).length - 1) return false;
+  room.turn++;
+  return true;
+}
+
+// 오늘 밤 고를 수 있는 행동
 function modes(p: Player): Mode[] {
   const out: Mode[] = [];
   if (p.team === "imposter") out.push("kill");
   if (p.role === "survivor") {
     if (p.uses) out.push("armor");
-  } else if (p.uses !== 0 && !(p.role === "blocker" && p.last)) out.push("ability");
+  } else if (p.uses !== 0) out.push("ability");
   if (p.role === "bomber") out.push("detonate");
   out.push("rest");
   return out;
@@ -467,9 +497,9 @@ const aimId = (p: Player) => (p.act?.mode === "ability" ? p.act.target : (p.act?
 export function act(room: Room, p: Player, mode: string, target = "", guess = "", extra = ""): string | null {
   if (room.phase !== "night") return "지금은 행동할 수 없어요";
   if (!p.alive) return "죽은 사람은 행동할 수 없어요";
+  if (turnOf(room, p) !== room.turn) return "지금은 내 차례가 아니에요";
   if (!modes(p).includes(mode as Mode)) {
     if (mode === "ability" && p.uses === 0) return "능력 횟수를 모두 썼어요";
-    if (mode === "ability" && p.role === "blocker" && p.last) return "경찰관은 이틀 연속으로 능력을 쓸 수 없어요";
     return "쓸 수 없는 행동이에요";
   }
   if (mode !== "kill" && mode !== "ability") {
@@ -478,16 +508,26 @@ export function act(room: Room, p: Player, mode: string, target = "", guess = ""
   }
   const t = room.players.find((x) => x.id === target);
   if (!t || !t.alive) return "고를 수 없는 대상이에요";
-  if (t === p) return "자기 자신은 고를 수 없어요";
+  // 능력 대상 검사. 의사만 자신을 고를 수 있고, 의사와 경찰관은 어젯밤 고른 사람을 연달아 고르지 못한다 (자기 치료도 연달아는 안 된다).
+  const aimed = (id: string) =>
+    id === p.id && p.role !== "doctor"
+      ? "자기 자신은 고를 수 없어요"
+      : (p.role === "doctor" || p.role === "blocker") && id === p.last
+        ? "이틀 연속 같은 사람은 고를 수 없어요"
+        : null;
+  if (mode === "kill" && t === p) return "자기 자신은 고를 수 없어요";
   if (mode === "kill" && t.team === "imposter") return "같은 편은 죽일 수 없어요";
   const curse = mode === "ability" && p.role === "sorcerer";
   if (mode === "ability") {
-    if (p.role === "doctor" && t.id === p.last) return "이틀 연속 같은 사람은 고를 수 없어요";
+    const bad = aimed(t.id);
+    if (bad) return bad;
     if (curse && !Object.hasOwn(ROLES, guess)) return "맞힐 역할을 골라 주세요";
   }
   if (extra) {
     if (mode !== "kill" || !canDoBoth(room, p)) return "살해와 능력을 함께 쓸 수 없어요";
-    if (extra === p.id || !room.players.some((x) => x.id === extra && x.alive)) return "고를 수 없는 대상이에요";
+    if (!room.players.some((x) => x.id === extra && x.alive)) return "고를 수 없는 대상이에요";
+    const bad = aimed(extra);
+    if (bad) return bad;
   }
   p.act = { mode, target: t.id, guess: curse ? (guess as Role) : null, extra: extra || null };
   return null;
@@ -573,7 +613,7 @@ function resolveNight(room: Room, rng: Rng) {
   const alive = all.filter((p) => p.alive);
   const byId = (id: string | null) => all.find((p) => p.id === id);
   const target = (p: Player) => byId(aimId(p))!; // 능력의 대상
-  const goes = (p: Player) => [p.act?.target, p.act?.extra].filter((id) => id != null); // 찾아가는 집들
+  const goes = (p: Player) => [p.act?.target, p.act?.extra].filter((id): id is string => id != null && id !== p.id); // 찾아가는 집들 (자기 치료는 외출이 아니다)
   const oneOf = <T>(a: T[]) => a[Math.floor(rng() * a.length)];
   // 본인만 보는 결과. scene은 같은 내용을 화면이 장면으로 그리기 위한 것
   const note = (p: Player, text: string, scene?: Scene) => {
@@ -689,7 +729,7 @@ function resolveNight(room: Room, rng: Rng) {
   const healed = new Set<Player>();
   for (const p of users("doctor")) {
     if (stopped.has(p)) continue;
-    note(target(p), "의사가 다녀갔습니다.", { kind: "healed" });
+    if (target(p) !== p) note(target(p), "의사가 다녀갔습니다.", { kind: "healed" });
     if (!p.insane) healed.add(target(p));
   }
 
@@ -963,6 +1003,7 @@ export function advance(room: Room, rng: Rng = Math.random) {
       p.scenes = [];
     }
     room.dawn = [];
+    room.turn = 0;
     room.phase = "night";
     room.day++;
   }
@@ -1015,7 +1056,14 @@ export function view(room: Room, me: Player, now = Date.now()) {
     dawn: room.dawn,
     setup: room.setup,
     remaining: room.deadline === null ? null : Math.max(0, room.deadline - now),
-    pending: playing ? pending(room).length : 0,
+    pending: room.phase === "day" ? pending(room).length : 0, // 밤에는 누가 골랐는지가 곧 역할이라 알리지 않는다
+    // 밤: 지금 누구 차례인가
+    turn: night
+      ? {
+          names: (turns(room)[room.turn] ?? []).filter((r) => r === "imposter" || room.roster.includes(r)).map((r) => (r === "imposter" ? "임포스터" : ROLES[r].name)),
+          mine: me.alive && turnOf(room, me) === room.turn,
+        }
+      : null,
     news: [...room.news, ...me.news],
     chat: room.chat.filter((c) => hears(room, me, c.to)),
     hostId: room.players.find((p) => p.connected)?.id ?? null,
@@ -1025,13 +1073,13 @@ export function view(room: Room, me: Player, now = Date.now()) {
       role: unknown ? null : me.role,
       team: me.team,
       uses: me.uses,
-      modes: night && me.alive ? modes(me) : [],
+      modes: night && me.alive && turnOf(room, me) === room.turn ? modes(me) : [],
       both: night && me.alive && canDoBoth(room, me),
       will: playing && me.will,
       act: me.act,
       pick: me.pick,
       // 오늘 밤 능력 대상으로 고를 수 없는 사람
-      blocked: night && me.role === "doctor" ? me.last : null,
+      blocked: night && (me.role === "doctor" || me.role === "blocker") ? me.last : null,
       notes: me.notes,
       scenes: me.scenes,
     },
@@ -1047,7 +1095,7 @@ export function view(room: Room, me: Player, now = Date.now()) {
       label: label(p),
       ally: ally(p),
       doing: night && ally(p) ? doing(p) : null, // 같은 편의 오늘 밤 행동
-      picked: playing ? (night ? p.act : p.pick) !== null : false,
+      picked: playing ? (night ? p === me && p.act !== null : p.pick !== null) : false, // 밤에는 차례가 역할을 말해 주므로 남이 골랐는지는 알리지 않는다
       provoked: room.phase === "day" && p.provoked,
       bombed: me.role === "bomber" && p.bombed, // 폭파범에게만: 폭탄을 설치해 둔 집
       marked: me.role === "haunter" && me.mark === p.id, // 무속인에게만: 양초를 둔 사람

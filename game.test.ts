@@ -1,7 +1,9 @@
 // 실행: npm test
 import assert from "node:assert/strict";
 import {
-  act,
+  turnOf,
+  pass,
+  act as rawAct,
   advance,
   allPicked,
   canStart,
@@ -45,11 +47,13 @@ function room(...specs: string[]): Room {
     p.uses = USES[role] ?? null;
     return p;
   });
+  r.roster = r.players.map((p) => p.role);
   r.phase = "night";
   r.day = 1;
   return r;
 }
 // 밤 행동을 넣고 정산한다. 값은 "kill p3", "ability p3", "ability p3 doctor", "rest", "armor", "detonate"
+const act = (r: Room, p: Player, ...rest: string[]) => ((r.turn = Math.max(0, turnOf(r, p))), rawAct(r, p, ...(rest as [string])));
 function night(r: Room, map: Record<number, string>) {
   r.phase = "night";
   for (const [i, s] of Object.entries(map)) {
@@ -123,7 +127,7 @@ for (let n = 4; n <= 10; n++) {
 {
   const r = room("imp:cleaner", "doctor", "lookout", "tracker", "imp:blamer", "snitch", "provoker");
   const [imp, doc, seen, tracker, imp2] = r.players;
-  assert.ok(act(r, doc, "ability", "p1")); // 자신은 치료할 수 없다
+  assert.ok(act(r, seen, "ability", "p2")); // 의사가 아니면 자신을 고를 수 없다
   assert.ok(act(r, imp, "kill", "p4")); // 같은 편은 죽일 수 없다
   assert.ok(act(r, doc, "kill", "p0")); // 시민은 살해를 고를 수 없다
   assert.equal(act(r, imp, "kill", "p2"), null);
@@ -150,10 +154,20 @@ for (let n = 4; n <= 10; n++) {
   assert.match(notes(r.players[2]), /P1 님 집에 P4 님이 찾아왔습니다/);
   assert.match(notes(r.players[3]), /아무도 걸리지 않았습니다/);
   r.phase = "night";
-  assert.ok(!view(r, r.players[1]).me.modes.includes("ability")); // 경찰관은 이틀 연속 쓸 수 없다
-  night(r, {});
+  // 경찰관은 어젯밤 막은 집만 연달아 못 막는다
+  assert.ok(act(r, r.players[1], "ability", "p0"));
+  assert.equal(act(r, r.players[1], "ability", "p2"), null);
+  // 의사는 자신을 치료할 수 있지만 연달아는 안 되고, 자기 치료는 외출이 아니다
+  const doc = r.players[4];
+  assert.equal(act(r, doc, "ability", "p4"), null);
+  assert.ok(act(r, r.players[2], "ability", "p2")); // 다른 역할은 자신을 고를 수 없다
+  night(r, { 1: "ability p4", 4: "ability p4" });
+  assert.match(r.players[1].notes.at(-1)!, /P4 님은 외출을 시도하지 않았습니다/);
   r.phase = "night";
-  assert.ok(view(r, r.players[1]).me.modes.includes("ability"));
+  assert.ok(act(r, doc, "ability", "p4"));
+  night(r, { 4: "ability p0" });
+  night(r, { 0: "kill p4", 4: "ability p4" });
+  assert.equal(doc.alive, true);
 
   const r2 = room("imp:blamer", "trapper", "doctor", "lookout", "tracker");
   night(r2, { 0: "kill p2", 1: "ability p2" });
@@ -498,13 +512,38 @@ for (let n = 4; n <= 10; n++) {
   }
 }
 
+// 밤의 차례: 발동 순서대로 돌고, 자기 차례에만 고른다. 임포스터 편은 역할과 상관없이 임포스터 차례다.
+{
+  const r = room("imp:blocker", "doctor", "lookout", "blocker");
+  const [imp, doc, seen, cop] = r.players;
+  r.turn = 0; // 경찰관 → 임포스터 → 의사 → 감시자
+  assert.deepEqual(view(r, doc).turn, { names: ["경찰관"], mine: false });
+  assert.equal(view(r, cop).turn!.mine, true);
+  assert.deepEqual(view(r, doc).me.modes, []);
+  assert.equal(rawAct(r, doc, "ability", "p2"), "지금은 내 차례가 아니에요");
+  assert.equal(rawAct(r, imp, "ability", "p1"), "지금은 내 차례가 아니에요"); // 임포스터 경찰관은 경찰관 차례에 고르지 않는다
+  assert.equal(rawAct(r, cop, "ability", "p0"), null);
+  assert.equal(view(r, doc).players[3].picked, false); // 남이 골랐는지는 보이지 않는다
+  assert.equal(view(r, cop).players[3].picked, true);
+  assert.equal(pass(r), true);
+  assert.deepEqual(view(r, doc).turn, { names: ["임포스터"], mine: false });
+  assert.equal(rawAct(r, imp, "kill", "p1"), null);
+  assert.equal(rawAct(r, cop, "ability", "p1"), "지금은 내 차례가 아니에요"); // 지나간 차례는 바꿀 수 없다
+  cop.alive = false; // 죽은 역할의 차례도 그대로 돈다
+  assert.equal(pass(r), true);
+  assert.equal(rawAct(r, doc, "ability", "p1"), null);
+  assert.equal(pass(r), true);
+  assert.deepEqual(view(r, seen).turn, { names: ["감시자"], mine: true });
+  assert.equal(pass(r), false);
+}
+
 // 접속이 끊긴 사람은 기다리지 않는다. 고르지 않았으면 무행동/기권으로 정산된다.
 {
   const r = room("imp:cleaner", "doctor", "lookout", "tracker");
   r.players[3].connected = false;
   for (const i of [0, 1]) act(r, r.players[i], "rest");
   assert.equal(allPicked(r), false);
-  assert.equal(view(r, r.players[0]).pending, 1);
+  assert.equal(view(r, r.players[0]).pending, 0); // 밤에는 몇 명이 골랐는지 알리지 않는다
   act(r, r.players[2], "rest");
   assert.equal(allPicked(r), true);
   advance(r, seq());
