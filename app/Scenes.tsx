@@ -991,7 +991,7 @@ export function ReplayHud({ flash, call, exile, seats, beat, calm }: { flash: Fl
   if (!call) return null;
   const me = seats.find((s) => s.isMe)?.id;
   const told = (e: Dawn) => {
-    if (e.kind === "death") return [head(e.who), <span key="d">{e.blast ? "집이 터졌다" : "쓰러졌다"}</span>, shown(e.reveal)];
+    if (e.kind === "death") return [head(e.who), <span key="d">{e.blast ? "집이 터졌다" : e.bolt ? "번개를 맞았다" : "쓰러졌다"}</span>, shown(e.reveal)];
     // 알아낸 역할은 밀고자 본인만 안다
     const mine = e.by === me ? call.mine.find((s) => s.kind === "snitch" && s.who === e.who) : undefined;
     return [head(e.by), to, head(e.who), mine?.kind === "snitch" && mine.role ? tile(mine.role, mine.team, 9) : null];

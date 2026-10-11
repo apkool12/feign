@@ -31,6 +31,7 @@ const HAT_NAME: Record<Hat, string> = { none: "없음", straw: "밀짚모자", w
 
 // WebGL은 브라우저에서만 돌므로 서버 렌더링에서 뺀다
 const Preview = dynamic(() => import("./Preview"), { ssr: false });
+const Lineup = dynamic(() => import("./Preview").then((m) => m.Lineup), { ssr: false });
 const Village = dynamic(() => import("./Village"), {
   ssr: false,
   loading: () => <p className="out p-4">마을 불러오는 중…</p>,
@@ -678,9 +679,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
       ? me.will
         ? "죽었다 · 낮에 유언 한마디"
         : "죽었다"
-      : view.turn && !view.turn.mine
-        ? `${view.turn.names.join("·")} 차례` // 밤은 역할마다 차례대로 고른다
-        : me.both
+      : me.both
           ? "혼자 남았다 · 살해와 능력 둘 다"
           : idle;
 
@@ -694,6 +693,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
   };
 
   // 좌석별 표시 정보. 마을(3D)과 목록(2D)이 같은 값을 그린다.
+  const acted = night && !view.turn?.mine; // 오늘 밤 내 차례가 지나갔다
   const seats = players.map((p) => {
     const isMe = p.id === me.id;
     const usable = night
@@ -727,7 +727,8 @@ function Game({ view, due, positions, send, leave }: GameProps) {
       enabled: me.alive && p.alive && usable && !replay && !call && !exile, // 연출이 카메라를 쓰는 동안은 누르지 못한다
       mark: killing ? ("kill" as const) : aiming ? ("aim" as const) : voting ? ("vote" as const) : null,
       // 이 집에서 보여 줄 내 능력 연출
-      effect: killing ? "kill" : aiming ? me.role : night && p.bombed && me.act?.mode === "detonate" ? "detonate" : null,
+      // 내 차례가 끝난 뒤에 나온다 (고르는 동안은 표시만). 번개는 마법사의 차례가 끝나면 모두가 보고, 폭발은 아침에 본다.
+      effect: view.bolts.includes(p.id) ? "sorcerer" : !acted ? null : killing ? "kill" : aiming && me.role !== "sorcerer" ? me.role : null,
       status,
       bombed: p.bombed,
       marked: p.marked,
@@ -975,8 +976,8 @@ function Game({ view, due, positions, send, leave }: GameProps) {
         seats={seats}
         scene={phase}
         going={night ? (me.act?.target ?? me.act?.extra ?? null) : null}
-        iconRole={night && me.alive && (me.act?.mode === "ability" || me.act?.extra) ? me.role : null}
-        shield={night && me.act?.mode === "armor"}
+        iconRole={acted && me.alive && me.role !== "sorcerer" && (me.act?.mode === "ability" || me.act?.extra) ? me.role : null}
+        shield={acted && me.act?.mode === "armor"}
         positions={positions}
         replay={replay}
         onReplayEnd={() => setReplay(null)}
@@ -992,7 +993,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
           setUnseen([]);
           setTold(phaseKey);
         }}
-        burnt={phase === "day" ? view.dawn.flatMap((e) => (e.kind === "death" && e.blast ? [e.who] : [])) : []}
+        burnt={phase === "day" ? view.dawn.flatMap((e) => (e.kind === "death" && (e.blast || e.bolt) ? [e.who] : [])) : []}
         unseen={unseen}
         onSeen={(id) => setUnseen((ids) => ids.filter((x) => x !== id))}
         onPick={pickSeat}
@@ -1007,6 +1008,8 @@ function Game({ view, due, positions, send, leave }: GameProps) {
               <div>
                 <small>{phase === "lobby" ? `방 · ${players.length}/${MAX_PLAYERS}` : title}</small>
                 <div className="t">{phase === "lobby" ? view.code : due !== null && <Countdown due={due} />}</div>
+                {/* 밤은 역할마다 차례대로 고른다 */}
+                {view.turn && <small style={{ marginTop: 5, opacity: view.turn.mine ? 1 : undefined }}>{view.turn.mine ? "내 차례" : `${view.turn.names.join("·")} 차례`}</small>}
               </div>
             </div>
           )}
@@ -1104,12 +1107,13 @@ function Game({ view, due, positions, send, leave }: GameProps) {
             ))}
             <h1 className="title relative">{view.result}</h1>
             {view.why && <p className="out relative text-xl">{view.why}</p>}
-            <ul className="relative flex flex-wrap justify-center gap-3.5">
+            <div data-lineup className="relative">
+            <ul className="flex flex-wrap justify-center gap-3.5">
               {players.map((p, i) => {
                 const r = roleOf(p.label);
                 return (
                   <li key={p.id} className={`pc paper ${p.won ? "" : "lose"}`}>
-                    <i style={{ background: COLORS[i % COLORS.length] }} />
+                    <div data-pic className="pic" style={{ "--c": COLORS[i % COLORS.length] } as React.CSSProperties} />
                     <b>{p.name}</b>
                     {r && <RoleTile role={r} />}
                     <span className="d">{p.label?.split("(")[0]}</span>
@@ -1117,6 +1121,9 @@ function Game({ view, due, positions, send, leave }: GameProps) {
                 );
               })}
             </ul>
+              {/* 카드의 빈 자리에 그 사람의 캐릭터가 선다: 이기면 환호, 지면 풀이 죽는다 */}
+              <Lineup people={players.map((p, i) => ({ skin: p.skin, hat: p.hat, color: COLORS[i % COLORS.length], won: p.won }))} />
+            </div>
             <div className="relative flex flex-wrap items-center justify-center gap-4">
               <button className="btn" onClick={() => setOpen("history")}>
                 기록 보기
