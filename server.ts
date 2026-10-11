@@ -185,6 +185,14 @@ function onMessage(ws: WebSocket, m: Record<string, unknown>): string | void {
       for (const [other, o] of sockets) if (o.room === room && other !== ws && (!ghost || !o.player.alive)) other.send(msg);
       return;
     }
+    case "rtc": {
+      // 음성 연결을 맺는 쪽지. 내용은 보지 않고 같은 방의 받는 사람에게만 전한다 (to가 "*"면 모두에게).
+      const to = str(m.to);
+      if (typeof m.data !== "object" || !m.data || JSON.stringify(m.data).length > 20_000) return;
+      const msg = JSON.stringify({ t: "rtc", from: player.id, data: m.data });
+      for (const [other, o] of sockets) if (o.room === room && other !== ws && (to === "*" || o.player.id === to)) other.send(msg);
+      return;
+    }
     case "next": // 자리 비운 사람을 기다리지 않고 넘기기
       if (!isHost) return "방장만 넘길 수 있어요";
       advance(room);
