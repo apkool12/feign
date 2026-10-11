@@ -183,8 +183,108 @@ function CutInDemo({ still }: { still: boolean }) {
   );
 }
 
+function demoSeat(id: string, skin: Skin, house: House, hat: Hat, i: number): Seat {
+  return {
+    id,
+    name: "",
+    skin,
+    house,
+    hat,
+    done: false,
+    alive: true,
+    isMe: i === 0,
+    ally: true,
+    mayor: false,
+    enabled: false,
+    mark: null,
+    effect: null,
+    status: "",
+    bombed: false,
+    marked: false,
+    won: false,
+  };
+}
+
+function ActVillageDemo({ demo }: { demo: string }) {
+  const params = new URLSearchParams(location.search);
+  const skin = SKINS.includes(params.get("skin") as Skin) ? (params.get("skin") as Skin) : "blob";
+  const held = params.get("held") !== "0";
+  const action = demo === "act-doctor" ? "doctor" : demo === "act-cleaner" ? "cleaner" : null;
+  const positions = useRef<Positions>(new Map());
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    if (!action) return;
+    const timer = setInterval(() => setN((x) => x + 1), 9000);
+    return () => clearInterval(timer);
+  }, [action]);
+  const seats = [
+    demoSeat("demo-me", skin, "house-1", "none", 0),
+    demoSeat("demo-target", "hachiware", "house-4", "straw", 1),
+    demoSeat("demo-2", "usagi", "house-6", "bow", 2),
+    demoSeat("demo-3", "blob", "house-8", "wizard", 3),
+  ];
+  if (action) seats[1].effect = action;
+  const replay: Flash = [{ kind: "doctor", who: "demo-target", saved: true }];
+  const call: Call = { events: [{ kind: "death", who: "demo-target", reveal: "의사(시민)", blast: true, bolt: false }], mine: [] };
+  return (
+    <main className="fixed inset-0" style={{ background: "var(--sky)" }}>
+      {action ? (
+        <Village
+          key={n}
+          seats={seats}
+          scene="night"
+          going="demo-target"
+          iconRole={action}
+          shield={false}
+          actKind={action}
+          standKind={action}
+          positions={positions}
+          demo
+          hud={false}
+          heldTools={held}
+          onPick={() => {}}
+          onMove={() => {}}
+        />
+      ) : demo === "recall-doctor-saved" ? (
+        <Village
+          key={n}
+          seats={seats}
+          scene="day"
+          going={null}
+          iconRole={null}
+          shield={false}
+          positions={positions}
+          demo
+          hud={false}
+          replay={replay}
+          onReplayEnd={() => setN((x) => x + 1)}
+          onPick={() => {}}
+          onMove={() => {}}
+        />
+      ) : (
+        <Village
+          key={n}
+          seats={seats}
+          scene="day"
+          going={null}
+          iconRole={null}
+          shield={false}
+          positions={positions}
+          demo
+          hud={false}
+          call={call}
+          onCallEnd={() => setN((x) => x + 1)}
+          burnt={["demo-target"]}
+          onPick={() => {}}
+          onMove={() => {}}
+        />
+      )}
+    </main>
+  );
+}
+
 export default function Page() {
-  const [demo, setDemo] = useState("");
+  const [demo, setDemo] = useState<string | null>(null);
   useEffect(() => setDemo(new URLSearchParams(location.search).get("demo") ?? ""), []);
   const [view, setView] = useState<View | null>(null);
   const [due, setDue] = useState<number | null>(null); // 페이즈가 끝나는 시각 (이 기기 시계 기준)
@@ -215,6 +315,7 @@ export default function Page() {
   };
 
   useEffect(() => {
+    if (demo !== "") return;
     voice.attach(send);
     saved.current = loadSaved();
     mine.current = loadPrefs();
@@ -293,7 +394,7 @@ export default function Page() {
       clearTimeout(timer);
       ws.current?.close();
     };
-  }, []);
+  }, [demo]);
 
   const leave = () => {
     try {
@@ -302,7 +403,9 @@ export default function Page() {
     location.reload();
   };
 
+  if (demo === null) return <main className="flex flex-1 flex-col" />;
   if (demo.startsWith("cutin")) return <CutInDemo still={demo === "cutin-still"} />;
+  if (demo === "act-doctor" || demo === "recall-doctor-saved" || demo === "dawn-blast" || demo === "act-cleaner") return <ActVillageDemo demo={demo} />;
   return (
     <main className="flex flex-1 flex-col">
       <div className="pointer-events-none fixed inset-x-0 top-24 z-30 flex flex-col items-center gap-2 px-3">
@@ -745,6 +848,14 @@ function Game({ view, due, positions, send, leave }: GameProps) {
           ? me.act.mode
           : null
       : null;
+  const standKind =
+    night && me.alive && me.act
+      ? me.act.mode === "ability"
+        ? me.role
+        : me.act.mode === "kill" || me.act.mode === "detonate" || me.act.mode === "armor"
+          ? me.act.mode
+          : null
+      : null;
   const seats = players.map((p) => {
     const isMe = p.id === me.id;
     const usable = night
@@ -1030,6 +1141,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
         iconRole={acted && me.alive && me.role !== "sorcerer" && (me.act?.mode === "ability" || me.act?.extra) ? me.role : null}
         shield={acted && me.act?.mode === "armor"}
         actKind={actKind}
+        standKind={standKind}
         positions={positions}
         replay={replay}
         onReplayEnd={() => setReplay(null)}
