@@ -201,7 +201,9 @@ export default function Page() {
       ws.current = sock;
       sock.onopen = () => {
         setOnline(true);
-        if (saved.current.code) sock.send(JSON.stringify({ t: "join", ...saved.current }));
+        // 초대 링크로 다른 방에 왔으면 전에 있던 방으로 돌아가지 않는다
+        const other = invited() && invited() !== saved.current.code;
+        if (saved.current.code && !other) sock.send(JSON.stringify({ t: "join", ...saved.current }));
         else if (invited() && mine.current.name) join(invited()); // 초대 링크로 왔고 이름이 있으면 메뉴를 건너뛴다
       };
       sock.onmessage = (e) => {
@@ -625,7 +627,8 @@ function Game({ view, due, positions, send, leave }: GameProps) {
       if (document.querySelector("dialog[open]")) return;
       const tag = e.target instanceof HTMLElement ? e.target.tagName : "";
       const typing = tag === "INPUT" || tag === "SELECT";
-      if (e.key === "Tab" && !typing) {
+      // 단추에 포커스가 있으면 Tab은 원래대로 다음 단추로 간다 (Shift+Tab으로 언제든 포커스를 잡을 수 있다)
+      if (e.key === "Tab" && !e.shiftKey && (e.target === document.body || tag === "CANVAS")) {
         e.preventDefault();
         setOpen("info");
       } else if (e.key === "Enter" && !typing && tag !== "BUTTON") {
@@ -647,6 +650,11 @@ function Game({ view, due, positions, send, leave }: GameProps) {
   // 쉬기처럼 집을 고르지 않는 행동을 고른 날. 그날은 집을 고르는 단추를 눌린 모양으로 두지 않는다.
   const [idleDay, setIdleDay] = useState<number | null>(() => (me.act && !targeted.includes(me.act.mode) ? view.day : null));
   const resting = idleDay === view.day;
+  // 오늘 밤 마지막으로 집을 골라 보낸 행동. 쉬기를 눌렀다가 마음을 바꾸면 이것을 다시 보낸다.
+  const aim = useRef<{ day: number; act: NonNullable<typeof me.act> } | null>(null);
+  useEffect(() => {
+    if (me.act && targeted.includes(me.act.mode)) aim.current = { day: view.day, act: me.act };
+  });
   const [guess, setGuess] = useState<Role>("doctor");
   const role = me.role ? ROLES[me.role] : null;
   const uses = me.uses === null ? "" : ` ${me.uses}`;
@@ -672,6 +680,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
 
   // 밤에 집을 골랐을 때. 혼자 남은 임포스터는 살해 대상과 능력 대상을 따로 고른다.
   const visit = (id: string) => {
+    setIdleDay(null);
     if (!me.both) return send({ t: "act", mode, target: id, guess });
     const killed = mode === "kill" ? id : me.act?.mode === "kill" ? me.act.target : null;
     const aimed = mode === "ability" ? id : me.act?.mode === "ability" ? me.act.target : (me.act?.extra ?? null);
@@ -709,7 +718,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
       isMe,
       ally: p.ally,
       mayor: p.mayor,
-      enabled: me.alive && p.alive && usable,
+      enabled: me.alive && p.alive && usable && !replay && !call && !exile, // 연출이 카메라를 쓰는 동안은 누르지 못한다
       mark: killing ? ("kill" as const) : aiming ? ("aim" as const) : voting ? ("vote" as const) : null,
       // 이 집에서 보여 줄 내 능력 연출
       effect: killing ? "kill" : aiming ? me.role : night && p.bombed && me.act?.mode === "detonate" ? "detonate" : null,
@@ -732,9 +741,13 @@ function Game({ view, due, positions, send, leave }: GameProps) {
           const aimed = m === "kill" || m === "ability";
           const pressed = aimed ? !resting && m === mode : resting && me.act?.mode === m;
           const choose = () => {
-            setIdleDay(aimed ? null : view.day);
+            const back = aimed && resting && aim.current?.day === view.day && aim.current.act.mode === m ? aim.current.act : null;
+            // 되돌릴 집이 없으면 집을 고를 때까지 서버에는 쉬기가 남으므로, 단추도 쉬기를 눌린 채로 둔다
+            if (!aimed) setIdleDay(view.day);
+            else if (back || !resting) setIdleDay(null);
             if (aimed) setWanted(m);
-            else send({ t: "act", mode: m });
+            if (back) send({ t: "act", ...back });
+            else if (!aimed) send({ t: "act", mode: m });
           };
           return round ? (
             <button key={m} aria-pressed={pressed} onClick={choose} className="round out">
@@ -1050,7 +1063,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
         )}
 
         {reveal && role && me.role && (
-          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-10 p-6">
+          <div className="reveal absolute inset-0 z-20 flex flex-col items-center justify-center gap-10 p-6">
             <div className="wash" style={{ "--w1": `rgb(${wash[me.team]} / .55)`, "--w2": "rgb(255 201 60 / .32)" } as React.CSSProperties} />
             <div className="paper relative flex w-[360px] max-w-full -rotate-1 flex-col items-center gap-3.5 !border-[5px] px-6 py-7 text-center !shadow-[0_12px_0_var(--ink),0_30px_60px_rgb(0_0_0/.45)]">
               <RoleTile role={me.role} size="xl" />
@@ -1426,7 +1439,7 @@ function Custom({ skin, house, hat, color, onSkin, onHouse, onHat }: CustomProps
         </button>
       </div>
       <div className="grid gap-7 md:grid-cols-[1fr_290px]">
-        <div className="flex flex-wrap content-start gap-4">
+        <div className="flex min-h-[446px] flex-wrap content-start gap-4">
           {tab === "skin"
             ? SKINS.map((skin) => (
                 <button key={skin} className="opt" aria-label={SKIN_NAME[skin]} aria-pressed={mine.skin === skin} onClick={() => onSkin(skin)}>
@@ -1453,10 +1466,10 @@ function Custom({ skin, house, hat, color, onSkin, onHouse, onHat }: CustomProps
           <div className="opt !h-60 !w-full">
             <Preview skin={mine.skin} hat={mine.hat} color={color} />
           </div>
-          {thumb(mine.house) && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={thumb(mine.house)!} alt={HOUSE_NAME[mine.house]} className="h-20 w-20" />
-          )}
+          <div className="h-20">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            {thumb(mine.house) && <img src={thumb(mine.house)!} alt={HOUSE_NAME[mine.house]} className="h-20 w-20" />}
+          </div>
         </div>
       </div>
     </>

@@ -396,6 +396,18 @@ button:disabled {
   background: var(--sky);
 }
 
+/* 낮은 창에서는 역할 카드를 통째로 줄인다 */
+@media (max-height: 760px) {
+  .reveal {
+    zoom: 0.8;
+  }
+}
+@media (max-height: 600px) {
+  .reveal {
+    zoom: 0.64;
+  }
+}
+
 /* 가운데 뜨는 창 */
 dialog.sheet {
   margin: auto;
