@@ -21,28 +21,24 @@ export function periodsOf(lines: string[]): Period[] {
     return made;
   };
   const cur = () => out[out.length - 1] ?? at(false, "시작");
-  const ballots = (s: string): Ballot[] =>
-    s.split(", ").map((b) => {
-      const [by, to] = b.split("→");
-      return { by, to: !to || to === "기권" ? null : to };
-    });
   for (const line of lines) {
     let m: RegExpMatchArray | null;
     if (line.startsWith("게임을 시작합니다") || line.startsWith("역할이 정해졌습니다")) continue;
     if ((m = line.match(/^(\d+일차 밤): (.+) 님이 사망했습니다\. \((.+)\)$/))) at(true, m[1]).steps.push({ kind: "dead", who: m[2], reveal: m[3] });
     else if ((m = line.match(/^(\d+일차 밤): (.+) 님이 (.+) 님을 지목했습니다\.$/))) at(true, m[1]).steps.push({ kind: "point", by: m[2], who: m[3] });
     else if ((m = line.match(/^(\d+일차 밤): 아무도 죽지 않았습니다\.$/))) at(true, m[1]).steps.push({ kind: "text", text: "조용했다" });
-    else if ((m = line.match(/^시장 선거: (.+)$/))) at(false, "시장 선거").steps.push({ kind: "votes", ballots: ballots(m[1]), tally: {} });
-    else if ((m = line.match(/^(\d+일차) 투표: (.+)$/))) at(false, `${m[1]} 낮`).steps.push({ kind: "votes", ballots: ballots(m[2]), tally: {} });
-    else if ((m = line.match(/^득표: (.+)$/))) {
-      const votes = cur().steps.filter((s) => s.kind === "votes").pop();
-      for (const t of m[1].split(", ")) {
+    else if ((m = line.match(/^(\d+일차) 득표: (.+)$/))) {
+      // 투표는 익명이라 받은 표 수만 온다
+      const votes: Step = { kind: "votes", ballots: [], tally: {} };
+      for (const t of m[2].split(", ")) {
         const k = t.match(/^(.+) ([\d.]+)표$/);
-        if (votes && k) votes.tally[k[1]] = Number(k[2]);
+        if (k) votes.tally[k[1]] = Number(k[2]);
       }
+      at(false, `${m[1]} 낮`).steps.push(votes);
     } else if ((m = line.match(/^(.+) 님이 추방당했습니다\. \((.+)\)$/))) cur().steps.push({ kind: "out", who: m[1], reveal: m[2] });
-    else if ((m = line.match(/^(.+) 님이 시장이 되었습니다/))) cur().steps.push({ kind: "mayor", who: m[1] });
+    else if ((m = line.match(/^(.+) 님이 시장이 되었습니다/))) at(false, "시장 선거").steps.push({ kind: "mayor", who: m[1] });
     else if (line.startsWith("시장이 뽑히지")) cur().steps.push({ kind: "text", text: "시장 없음" });
+    else if ((m = line.match(/^(\d+일차) 낮: 과반/))) at(false, `${m[1]} 낮`).steps.push({ kind: "text", text: "추방 없음" });
     else if (line.startsWith("과반을 얻은")) cur().steps.push({ kind: "text", text: "추방 없음" });
     else cur().steps.push({ kind: "text", text: line });
   }

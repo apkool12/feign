@@ -113,7 +113,8 @@ for (let n = 4; n <= 10; n++) {
   r.mayor = "p1";
   day(r, tie); // 3.1표 대 3표
   assert.equal(r.players[0].alive, false);
-  assert.ok(r.log.includes("득표: P0 3.1표, P1 3표"));
+  assert.ok(r.log.includes("1일차 득표: P0 3표, P1 3표")); // 시장의 0.1표는 알리지 않는다
+  assert.ok(!r.log.some((l) => l.includes("→"))); // 누가 누구를 찍었는지는 알리지 않는다
   assert.equal(r.winner, "innocent");
 
   const r2 = make(); // 시장이 없으면 3표 대 3표는 과반이 아니다
@@ -199,7 +200,7 @@ for (let n = 4; n <= 10; n++) {
   r.players[1].provoked = true;
   day(r, {});
   assert.equal(r.players[1].alive, true);
-  assert.ok(r.log.includes("득표: P1 1.5표"));
+  assert.ok(r.log.includes("1일차 득표: P1 1.5표"));
 }
 
 // 연쇄 살인범에게 죽어 역할이 가려져도 같은 편은 정체를 안다

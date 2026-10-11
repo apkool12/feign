@@ -890,7 +890,8 @@ function resolveDay(room: Room, rng: Rng) {
   const alive = room.players.filter((p) => p.alive);
   const nameOf = (id: string) => (id === SKIP ? "기권" : room.players.find((p) => p.id === id)!.name);
   const votes = alive.map((p) => p.pick ?? SKIP);
-  const ballots = alive.map((p, i) => `${p.name}→${nameOf(votes[i])}`).join(", ");
+  // 투표는 익명이다. 누가 누구에게 던졌는지는 알리지 않고(판이 끝난 뒤의 기록에만 남는다), 받은 표 수만 알린다.
+  const shown = new Map<string, number>(); // 알리는 표 수. 시장의 0.1표는 빼서 시장이 누구를 찍었는지 드러나지 않게 한다.
   const count = new Map<string, number>(); // 0.1표 단위
   const add = (id: string, n: number) => id !== SKIP && count.set(id, (count.get(id) ?? 0) + n);
   const record = (chosen: string | null) =>
@@ -903,7 +904,6 @@ function resolveDay(room: Room, rng: Rng) {
     });
 
   if (room.day === 0) {
-    announce(room, `시장 선거: ${ballots}`);
     votes.forEach((v) => add(v, 10));
     const t = tops(count);
     if (!t.length) {
@@ -921,12 +921,13 @@ function resolveDay(room: Room, rng: Rng) {
   const bonus = Math.min(20, alive.length * 5);
   for (const p of provoked) {
     add(p.id, bonus);
+    shown.set(p.id, bonus);
     p.provoked = false;
   }
   alive.forEach((p, i) => add(votes[i], p.id === room.mayor ? 10 + MAYOR_BONUS : 10));
-  announce(room, `${room.day}일차 투표: ${ballots}`);
+  for (const v of votes) if (v !== SKIP) shown.set(v, (shown.get(v) ?? 0) + 10);
   if (provoked.length) announce(room, `선동으로 ${bonus / 10}표를 안고 시작: ${provoked.map((p) => p.name).join(", ")}`);
-  if (count.size) announce(room, `득표: ${[...count].sort((a, b) => b[1] - a[1]).map(([id, n]) => `${nameOf(id)} ${n / 10}표`).join(", ")}`);
+  if (count.size) announce(room, `${room.day}일차 득표: ${[...count].sort((a, b) => b[1] - a[1]).map(([id]) => `${nameOf(id)} ${shown.get(id)! / 10}표`).join(", ")}`);
 
   // 과반 득표여야 추방된다. 동률이면 시장의 0.1표가 가른다.
   const t = tops(count);
