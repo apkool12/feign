@@ -541,23 +541,11 @@ dialog.sheet::backdrop {
   padding: 16px 10px 14px;
   text-align: center;
 }
-.pc > i {
-  position: relative;
-  width: 70px;
-  height: 74px;
-  border-radius: 50% 50% 46% 46%;
-  border: 3.5px solid var(--ink);
-}
-.pc > i::after {
-  content: "";
-  position: absolute;
-  left: 19px;
-  top: 27px;
-  width: 7px;
-  height: 10px;
-  border-radius: 4px;
-  background: var(--ink);
-  box-shadow: 22px 0 0 var(--ink);
+/* 캐릭터가 서는 자리. 발밑에 그 사람 색의 둥근 깔개 */
+.pc .pic {
+  width: 96px;
+  height: 104px;
+  background: radial-gradient(ellipse 44% 12% at 50% 92%, var(--c) 0 98%, transparent 100%);
 }
 .pc b {
   max-width: 100%;
