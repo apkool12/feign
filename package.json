@@ -7,7 +7,8 @@
     "dev": "node --experimental-strip-types --disable-warning=ExperimentalWarning server.ts",
     "build": "next build",
     "start": "NODE_ENV=production node --experimental-strip-types --disable-warning=ExperimentalWarning server.ts",
-    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning game.test.ts"
+    "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning game.test.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning sound.test.ts && node --experimental-strip-types --disable-warning=ExperimentalWarning timeline.test.ts",
+    "sim": "node --experimental-strip-types --disable-warning=ExperimentalWarning sim.ts"
   },
   "dependencies": {
     "@react-three/fiber": "^9.8.1",
