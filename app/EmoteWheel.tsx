@@ -23,6 +23,7 @@ function Spots({ look, selected, nonce }: { look: Look; selected: EmoteId | null
       const scale = r.height / 1.5;
       g.position.set(r.left + r.width / 2 - box.left - box.width / 2, box.top + box.height / 2 - (r.top + r.height / 2) - 0.53 * scale, 0);
       g.scale.setScalar(scale);
+      g.rotation.x = 0.25; // 마을처럼 살짝 위에서 내려다본다
     }
   });
   return (
