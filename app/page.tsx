@@ -737,6 +737,14 @@ function Game({ view, due, positions, send, leave }: GameProps) {
 
   // 좌석별 표시 정보. 마을(3D)과 목록(2D)이 같은 값을 그린다.
   const acted = night && !view.turn?.mine; // 오늘 밤 내 차례가 지나갔다
+  const actKind =
+    acted && me.alive && me.act
+      ? me.act.mode === "ability"
+        ? me.role
+        : me.act.mode === "kill" || me.act.mode === "detonate" || me.act.mode === "armor"
+          ? me.act.mode
+          : null
+      : null;
   const seats = players.map((p) => {
     const isMe = p.id === me.id;
     const usable = night
@@ -1021,6 +1029,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
         going={night ? (me.act?.target ?? me.act?.extra ?? null) : null}
         iconRole={acted && me.alive && me.role !== "sorcerer" && (me.act?.mode === "ability" || me.act?.extra) ? me.role : null}
         shield={acted && me.act?.mode === "armor"}
+        actKind={actKind}
         positions={positions}
         replay={replay}
         onReplayEnd={() => setReplay(null)}

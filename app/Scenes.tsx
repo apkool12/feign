@@ -15,7 +15,7 @@ import { play, SFX, type Sfx } from "./sound";
 import { lean, stage, type Call, type Exile, type Flash } from "./stage";
 import { lift, type Plan } from "./Terrain";
 import dynamic from "next/dynamic";
-import { Body, Model, type Seat } from "./Village";
+import { Body, Model, actClip, type Seat } from "./Village";
 
 const CutIn = dynamic(() => import("./Preview").then((m) => m.CutIn), { ssr: false }); // 밀고자 지목 컷인 (Preview가 Village를 불러오므로 늦게 불러온다)
 
@@ -187,7 +187,7 @@ function write(flash: Flash, seats: Seat[], spots: Spot[], sizes: number[], heig
         const set = step(h).addScaledVector(side(h), -0.8);
         const hide = spots[h].house.clone().addScaledVector(side(h), -sizes[h] - 1).addScaledVector(out(h), -0.6);
         const mine: Seg[] = [
-          { t0: 0, t1: L + 0.9, a: set, b: set, clip: "cast", face: step(h) },
+          { t0: 0, t1: L + 0.9, a: set, b: set, clip: actClip("trapper"), face: step(h) },
           { t0: L + 0.9, t1: L + 1.5, a: set, b: hide, clip: "sneak" },
         ];
         const cast = [part(me, mine)];
@@ -227,17 +227,19 @@ function write(flash: Flash, seats: Seat[], spots: Spot[], sizes: number[], heig
         // 내가 집 안으로 들어가 지킨다. 살렸으면 그림자가 문 앞까지 왔다가 방패 빛에 놀라 물러난다.
         const w = index(scene.who);
         if (w < 0) return null;
-        const cast = [
-          part(me, [
-            { t0: 0, t1: L + 0.3, a: step(w), b: step(w), clip: "idle", face: spots[w].house },
-            { t0: L + 0.3, t1: L + 0.8, a: step(w), b: sill(w), clip: "walk", s1: 0 },
-          ]),
-        ];
-        const effects = [fx(w, "doctor", L + 0.8, 1e9)];
-        const cues: Cue[] = [
-          { t: L + 0.3, name: "door" },
-          { t: L + 0.9, name: "doctor" },
-        ];
+        const mine: Seg[] = scene.saved
+          ? [
+              { t0: 0, t1: L + 0.3, a: step(w), b: step(w), clip: "idle", face: spots[w].house },
+              { t0: L + 0.3, t1: 1e9, a: step(w), b: step(w), clip: actClip("doctorSaved"), face: spots[w].house },
+            ]
+          : [
+              { t0: 0, t1: L + 0.3, a: step(w), b: step(w), clip: "idle", face: spots[w].house },
+              { t0: L + 0.3, t1: L + 0.8, a: step(w), b: sill(w), clip: "walk", s1: 0 },
+            ];
+        const cast = [part(me, mine)];
+        const effects = [fx(w, "doctor", scene.saved ? L + 0.3 : L + 0.8, 1e9)];
+        const cues: Cue[] = [{ t: L + 0.9, name: "doctor" }];
+        if (!scene.saved) cues.unshift({ t: L + 0.3, name: "door" });
         let len = L + 2.8;
         if (scene.saved) {
           const segs: Seg[] = [];
@@ -247,6 +249,7 @@ function write(flash: Flash, seats: Seat[], spots: Spot[], sizes: number[], heig
           effects.push({ t0: t - 0.1, t1: t + 1.1, at: step(w), rot: 0, kind: "shield" });
           cues.push({ t, name: "kill" });
           len = t + 1.6;
+          mine[1].t1 = len;
         }
         effects[0].t1 = len;
         return { len, cast, fx: effects, cues, ...front(w) };
@@ -319,7 +322,7 @@ function write(flash: Flash, seats: Seat[], spots: Spot[], sizes: number[], heig
         const len = t + 2.6;
         return {
           len,
-          cast: [shade(segs), part(me, [pop(me, t + 1.2, step(me)), { t0: t + 1.55, t1: len, a: step(me), b: step(me), clip: "cheer", face: step(me).multiplyScalar(0.5) }])],
+          cast: [shade(segs), part(me, [pop(me, t + 1.2, step(me)), { t0: t + 1.55, t1: len, a: step(me), b: step(me), clip: actClip("healed"), face: step(me).multiplyScalar(0.5) }])],
           fx: [fx(me, "doctor", t + 0.4, len)],
           cues: [
             { t, name: "door" },
@@ -334,7 +337,7 @@ function write(flash: Flash, seats: Seat[], spots: Spot[], sizes: number[], heig
         return {
           len,
           cast: [
-            shade([{ t0: 0, t1: len, a: step(me), b: step(me), clip: "cast", face: sill(me) }]),
+            shade([{ t0: 0, t1: len, a: step(me), b: step(me), clip: actClip("provoker"), face: sill(me) }]),
             part(me, [pop(me, L + 0.9), { t0: L + 1.25, t1: L + 2, a: sill(me), b: sill(me), clip: "startle", face: step(me) }, { t0: L + 2, t1: len, a: sill(me), b: sill(me), clip: "sad", face: step(me) }]),
           ],
           fx: [fx(me, "provoker", L + 0.2, len)],

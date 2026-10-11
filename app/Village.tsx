@@ -18,6 +18,7 @@ import { Replay, ReplayHud } from "./Scenes";
 import { play } from "./sound";
 import { lean, type Call, type Exile, type Flash } from "./stage";
 import { collider, lift, plan, Terrain, type Circle, type Plan } from "./Terrain";
+import type { Mode, Role } from "../game";
 
 export type Scene = "lobby" | "night" | "day" | "ended";
 export type Positions = Map<string, { x: number; z: number }>;
@@ -48,6 +49,7 @@ interface Props {
   going: string | null; // 오늘 밤 내가 찾아가는 집
   iconRole: string | null; // 능력을 쓰는 동안 머리 위에 띄울 역할 그림
   shield: boolean; // 오늘 밤 갑옷을 입기로 했다
+  actKind?: string | null; // 내 차례가 지난 뒤 보여 줄 몸짓
   positions: RefObject<Positions>; // 다른 플레이어들이 보내 온 위치
   demo?: boolean; // 메뉴 배경: 조작 없이 카메라가 스스로 돈다 (이름이 빈 자리는 이름표도 없다)
   replay?: Flash | null; // 어젯밤 회상: 이 장면이 도는 동안 마을은 밤으로 돌아가고 평소의 캐릭터들은 물러난다
@@ -197,16 +199,52 @@ function Campfire({ night }: { night: boolean }) {
 
 type Paint = (name: string, material: THREE.MeshStandardMaterial) => void;
 
+type ActKind = Role | Extract<Mode, "kill" | "detonate" | "armor"> | "doctorSaved" | "healed" | "snitchTarget";
+
+// 역할/행동별 몸짓. 없는 클립은 Model에서 cast로 대신한다.
+export const ACT_CLIP = {
+  doctor: "medic",
+  doctorSaved: "cpr",
+  healed: "revive",
+  blocker: "halt",
+  lookout: "spy",
+  investigator: "inspect",
+  trapper: "settrap",
+  snitch: "point",
+  snitchTarget: "flinch",
+  provoker: "shout",
+  tracker: "track",
+  cleaner: "sweep",
+  blamer: "paint",
+  survivor: "brace",
+  serialKiller: "stab",
+  bomber: "plant",
+  thief: "steal",
+  sorcerer: "conjure",
+  haunter: "candle",
+  kill: "stab",
+  detonate: "press",
+  armor: "brace",
+} as const satisfies Record<ActKind, string>;
+
+const LOOP_ACT_CLIPS = new Set(["cpr", "halt", "spy", "shout", "sweep", "press", "candle"]);
+export function actClip(kind: string | null | undefined) {
+  return kind && Object.hasOwn(ACT_CLIP, kind) ? ACT_CLIP[kind as ActKind] : "cast";
+}
+function actSecs(kind: string | null | undefined) {
+  return LOOP_ACT_CLIPS.has(actClip(kind)) ? 2.4 : 1.2;
+}
+
 // glb 모델 하나. 인스턴스마다 재질을 따로 가져서, paint로 재질 이름별 색을 바꿀 수 있다
 // (지붕·몸을 플레이어 색으로, 창문을 밤에 밝게 등). paint는 매번 원래 색에서 다시 칠한다.
 // 뼈대가 있는 모델(캐릭터)은 clip이 가리키는 동작을 재생하고, 표정 하나만 보이며(동작에 짝지은 표정이 face보다 먼저다), overhead를 머리 위 기준점에 붙인다.
-type ModelProps = { file: string; paint?: Paint; clip?: RefObject<string>; face?: string; overhead?: ReactNode; door?: RefObject<number> };
-const ONCE = new Set(["vote", "startle", "turn", "die", "cast", "yawn"]); // 한 번 하고 마지막 자세로 멈추는 동작
+type ModelProps = { file: string; paint?: Paint; clip?: RefObject<string>; face?: string; overhead?: ReactNode; held?: ReactNode; door?: RefObject<number> }; // held는 오른팔 뼈(armR)에 붙는다
+const ONCE = new Set(["vote", "startle", "turn", "die", "cast", "yawn", ...Object.values(ACT_CLIP).filter((name) => !LOOP_ACT_CLIPS.has(name))]); // 한 번 하고 마지막 자세로 멈추는 동작
 const FACE: Record<string, string> = { cheer: "happy", startle: "surprised", die: "dead", sad: "scared", yawn: "sleepy" }; // 동작과 짝인 표정
 const STEP = 1 / 60; // 자세 갱신 간격 (클립 키 사이는 보간된다)
 const THIN = 0.025; // 집 외곽선 껍데기(두께 약 0.045)를 이만큼 안으로 당긴다
 
-export function Model({ file, paint, clip, face = "default", overhead, door, ...props }: ModelProps & ThreeElements["group"]) {
+export function Model({ file, paint, clip, face = "default", overhead, held, door, ...props }: ModelProps & ThreeElements["group"]) {
   const gltf = useLoader(GLTFLoader, `/models/${file}.glb`);
   const scene = useMemo(() => {
     const copy = clone(gltf.scene); // 뼈대까지 따로 복제한다
@@ -250,6 +288,7 @@ export function Model({ file, paint, clip, face = "default", overhead, door, ...
   });
   const mixer = useMemo(() => new THREE.AnimationMixer(scene), [scene]);
   const playing = useRef<THREE.AnimationAction | null>(null);
+  const asked = useRef("");
   const wait = useRef(0);
   const shown = useRef<{ scene: THREE.Object3D; face: string } | null>(null);
   useFrame((_, dt) => {
@@ -262,13 +301,18 @@ export function Model({ file, paint, clip, face = "default", overhead, door, ...
         if (o.name.startsWith("face-")) o.visible = o.name === `face-${want}` || o.name.startsWith(`face-${want}-`);
       });
     }
-    const found = clip && THREE.AnimationClip.findByName(gltf.animations, clip.current);
+    const requested = clip.current;
+    const found = THREE.AnimationClip.findByName(gltf.animations, requested) ?? (requested === "cast" ? undefined : THREE.AnimationClip.findByName(gltf.animations, "cast"));
     if (!found) return;
     const next = mixer.clipAction(found);
-    if (next !== playing.current) {
+    if (next !== playing.current || asked.current !== requested) {
+      asked.current = requested;
       if (ONCE.has(found.name)) {
         next.setLoop(THREE.LoopOnce, 1);
         next.clampWhenFinished = true;
+      } else {
+        next.setLoop(THREE.LoopRepeat, Infinity);
+        next.clampWhenFinished = false;
       }
       next.reset().fadeIn(0.15).play();
       playing.current?.fadeOut(0.15);
@@ -286,10 +330,12 @@ export function Model({ file, paint, clip, face = "default", overhead, door, ...
     });
     return found;
   }, [scene]);
+  const hand = useMemo(() => scene.getObjectByName("armR"), [scene]);
   return (
     <>
       <primitive object={scene} {...props} />
       {overhead && (top ? createPortal(overhead, top) : <group position={[0, 0.9, 0]}>{overhead}</group>)}
+      {held && hand && createPortal(held, hand)}
     </>
   );
 }
@@ -662,14 +708,6 @@ const TINT = new THREE.Color();
 
 // 캐릭터의 생김새. ghost면 죽은 뒤의 내 모습(나에게만 보인다)인 유령을 그린다.
 export function Body({ seat, color, clip, ghost = false }: { seat: Seat; color: string; clip: RefObject<string>; ghost?: boolean }) {
-  // 걷는 동작은 다리를 휘젓고 몸을 숙여서 발끝이 서 있을 때보다 더 내려간다. 걷는 동안만 조금 더 띄운다.
-  const feet = useRef<THREE.Group>(null);
-  useFrame((_, dt) => {
-    const g = feet.current;
-    if (!g) return;
-    const to = clip.current === "walk" || clip.current === "sneak" ? 0.24 : 0.13;
-    g.position.y += (to - g.position.y) * Math.min(1, dt * 12);
-  });
   if (ghost)
     return (
       <>
@@ -714,7 +752,7 @@ export function Body({ seat, color, clip, ghost = false }: { seat: Seat; color: 
       {/* 캐릭터 모델이 늦게 와도 이름표는 먼저 보인다 */}
       <Suspense fallback={null}>
         {/* 발이 길과 광장의 덧칠(땅보다 조금 높다)에 묻히지 않게 살짝 띄운다 */}
-        <group ref={feet} position-y={0.13}>
+        <group position-y={0.13}>
           {seat.skin === "blob" ? (
             blob
           ) : (
@@ -910,6 +948,7 @@ type MeProps = {
   sad: boolean;
   iconRole: string | null;
   shield: boolean;
+  actKind: string | null;
   land: Plan;
   collide: (position: THREE.Vector3, solid: boolean) => void; // 건물·나무·물·다른 캐릭터에 겹치지 않게 밀어낸다
   controls: RefObject<OrbitControls | null>;
@@ -917,7 +956,7 @@ type MeProps = {
 };
 
 // 내 캐릭터. WASD나 방향키로 직접 움직이고, 페이즈가 바뀌거나 집을 고르면 그리로 알아서 걸어간다.
-function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night, shock, sad, iconRole, shield, land, collide, controls, onMove }: MeProps) {
+function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night, shock, sad, iconRole, shield, actKind, land, collide, controls, onMove }: MeProps) {
   const ref = useRef<THREE.Group>(null);
   const bed = useRef({ at: turn.at, from: new THREE.Vector3() });
   const puff = useRef<THREE.Group>(null);
@@ -926,7 +965,7 @@ function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night
   const lastTo = useRef(to);
   const clip = useRef("idle");
   const act = useRef(newAct(seat, shock));
-  const knock = useRef({ cast: -1, done: to, shield }); // 고른 집에 도착하면 문을 두드리고, 능력이면 이어서 손을 든다
+  const knock = useRef({ cast: -1, done: to, act: null as string | null }); // 고른 집에 도착하면 문을 두드리고, 능력이면 이어서 몸짓을 한다
   const pace = useRef(0); // 다음 발소리가 날 시각
   const sent = useRef({ x: Infinity, z: Infinity, t: 0 }); // 마지막으로 보낸 위치
   const death = useDeath(seat.alive);
@@ -999,18 +1038,26 @@ function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night
       collide(g.position, seat.alive); // 알아서 걸을 때도 건물과 사람을 돌아서 간다
       if (!moving && visiting && knock.current.done !== to) {
         knock.current.done = to;
-        knock.current.cast = iconRole ? t + 1.1 : -1;
+        knock.current.act = actKind;
+        knock.current.cast = actKind ? t + 1.1 : -1;
         cut(act.current, "knock", t, 1.1);
         play("knock");
       }
     }
     const arrived = knock.current;
     if (moving) arrived.cast = -1;
-    if ((arrived.cast > 0 && t > arrived.cast) || (shield && !arrived.shield)) {
+    if (!actKind) {
+      arrived.act = null;
       arrived.cast = -1;
-      cut(act.current, "cast", t, 1.2); // 능력을 쓴다
+    } else if (!moving && arrived.act !== actKind && (!visiting || arrived.done === to)) {
+      arrived.act = actKind;
+      if (visiting) arrived.cast = t + 0.15;
+      else cut(act.current, actClip(actKind), t, actSecs(actKind));
     }
-    arrived.shield = shield;
+    if (arrived.cast > 0 && t > arrived.cast) {
+      arrived.cast = -1;
+      cut(act.current, actClip(actKind), t, actSecs(actKind)); // 능력을 쓴다
+    }
     const calm = show ?? acting(act.current, seat, shock, sad, t, moving, night);
     clip.current = progress < 1 ? "die" : !seat.alive ? (moving ? "walk" : "idle") : calm; // 죽은 뒤는 유령의 동작
     if (gone !== (!seat.alive && progress >= 1)) setGone(!gone); // 쓰러지는 연출이 끝나면 유령으로 바뀐다
@@ -1046,7 +1093,7 @@ function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night
   );
 }
 
-export default function Village({ seats, scene, going, iconRole, shield, positions, demo = false, replay = null, onReplayEnd, call = null, onCallEnd, exile = null, onExileEnd, unseen = [], burnt = [], onSeen, onPick, onMove }: Props) {
+export default function Village({ seats, scene, going, iconRole, shield, actKind = null, positions, demo = false, replay = null, onReplayEnd, call = null, onCallEnd, exile = null, onExileEnd, unseen = [], burnt = [], onSeen, onPick, onMove }: Props) {
   const n = seats.length;
   const spots = useMemo(() => layout(n), [n]);
   const [beat, setBeat] = useState(-1); // 회상·발표의 화면 아래 글이 어디까지 넘어갔나
@@ -1176,6 +1223,7 @@ export default function Village({ seats, scene, going, iconRole, shield, positio
               sad={scene === "ended" && !seat.won}
               iconRole={iconRole}
               shield={shield}
+              actKind={actKind}
               land={land}
               collide={collide}
               controls={controls}
