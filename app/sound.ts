@@ -291,7 +291,14 @@ const VARIED: Partial<Record<Sfx, [Sfx[], number, number]>> = {
 };
 const lastPick: Partial<Record<Sfx, number>> = {};
 export function play(name: Sfx, gain = 1, rate = 1) {
-  if (!ctx || ctx.state !== "running" || !volume()) return;
+  if (!ctx || !volume()) return;
+  if (ctx.state !== "running") {
+    // 탭이 가려진 사이 브라우저가 소리를 재웠으면 깨워서 낸다 (디스코드를 보다가도 낮·밤 종은 들리게).
+    // 한참 뒤에야 깨어나면 밀린 소리가 한꺼번에 쏟아지므로 버린다.
+    const asked = performance.now();
+    void ctx.resume().then(() => ctx?.state === "running" && performance.now() - asked < 500 && play(name, gain, rate));
+    return;
+  }
   const varied = VARIED[name];
   if (varied) {
     const [names, g, r] = varied;
