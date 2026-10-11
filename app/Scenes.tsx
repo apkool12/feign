@@ -27,7 +27,7 @@ type Spot = { house: V; door: V; plaza: V; angle: number };
 type Seg = { t0: number; t1: number; a: V; b: V; clip: string; s0?: number; s1?: number; face?: V; round?: boolean; up?: [number, number]; sway?: boolean; yaw?: number };
 type Part = { seat: Seat | null; color: string; segs: Seg[]; prop?: string; balloons?: number; rise?: number; tip?: { at: number; by: number } }; // rise는 떠오르기 시작하는 때(끈이 휜다), tip은 박힌 뒤 건들거리다 기우는 묘비 // seat이 null이면 누구인지 모르는 그림자, prop이면 소품 모델. balloons는 풍선이 달리기 시작하는 때
 // 능력 효과 (집 기준으로 놓인다). h는 그 집 지붕 높이, door는 문의 앞뒤 위치. kind가 "trap"이면 덫: armed면 이미 놓여 있고, snap은 닫히는 때.
-type Fx = { t0: number; t1: number; at: V; rot: number; kind: string; h?: number; door?: number; armed?: boolean; snap?: number };
+type Fx = { t0: number; t1: number; at: V; rot: number; kind: string; h?: number; door?: number; armed?: boolean; snap?: number; house?: { file: string; color: string } };
 type Icon = { t0: number; t1: number; at: V; role: string }; // 떠오르는 역할 패
 type Cue = { t: number; name: Sfx };
 // 장면 하나. 시간은 장면이 시작된 때부터 잰다 (처음 LEAD초는 카메라가 자리를 잡는다).
@@ -224,33 +224,61 @@ function write(flash: Flash, seats: Seat[], spots: Spot[], sizes: number[], heig
         };
       }
       case "doctor": {
-        // 내가 집 안으로 들어가 지킨다. 살렸으면 그림자가 문 앞까지 왔다가 방패 빛에 놀라 물러난다.
+        // 내가 집 안으로 들어가 지킨다. 살렸으면 내 회상에서는 심폐소생술까지 본다.
         const w = index(scene.who);
         if (w < 0) return null;
-        const mine: Seg[] = scene.saved
-          ? [
-              { t0: 0, t1: L + 0.3, a: step(w), b: step(w), clip: "idle", face: spots[w].house },
-              { t0: L + 0.3, t1: 1e9, a: step(w), b: step(w), clip: actClip("doctorSaved"), face: spots[w].house },
-            ]
-          : [
-              { t0: 0, t1: L + 0.3, a: step(w), b: step(w), clip: "idle", face: spots[w].house },
-              { t0: L + 0.3, t1: L + 0.8, a: step(w), b: sill(w), clip: "walk", s1: 0 },
-            ];
-        const cast = [part(me, mine)];
-        const effects = [fx(w, "doctor", scene.saved ? L + 0.3 : L + 0.8, 1e9)];
-        const cues: Cue[] = [{ t: L + 0.9, name: "doctor" }];
-        if (!scene.saved) cues.unshift({ t: L + 0.3, name: "door" });
-        let len = L + 2.8;
-        if (scene.saved) {
-          const segs: Seg[] = [];
-          const t = creep(w, L + 1.1, segs);
-          segs.push({ t0: t, t1: t + 0.7, a: step(w), b: step(w), clip: "startle", face: spots[w].house }, flee(w, t + 0.7));
-          cast.push(shade(segs));
-          effects.push({ t0: t - 0.1, t1: t + 1.1, at: step(w), rot: 0, kind: "shield" });
-          cues.push({ t, name: "kill" });
-          len = t + 1.6;
-          mine[1].t1 = len;
+        if (scene.saved && w !== me) {
+          const post = step(w).addScaledVector(side(w), -0.85);
+          const help = step(w).addScaledVector(side(w), -0.25);
+          const body = step(w).addScaledVector(side(w), 0.38);
+          const hurt: Seg[] = [
+            { t0: 1.5, t1: 2, a: sill(w), b: body, clip: "die", s0: 0.35, face: post },
+            { t0: 2, t1: 2.5, a: body, b: body, clip: "die", face: post },
+            { t0: 2.5, t1: 2.62, a: body, b: body, clip: "die", face: post, up: [0, 0.09] },
+            { t0: 2.62, t1: 2.9, a: body, b: body, clip: "die", face: post, up: [0.09, 0] },
+            { t0: 2.9, t1: 3.02, a: body, b: body, clip: "die", face: post, up: [0, 0.09] },
+            { t0: 3.02, t1: 3.3, a: body, b: body, clip: "die", face: post, up: [0.09, 0] },
+            { t0: 3.3, t1: 3.42, a: body, b: body, clip: "die", face: post, up: [0, 0.09] },
+            { t0: 3.42, t1: 3.7, a: body, b: body, clip: "die", face: post, up: [0.09, 0] },
+            { t0: 3.7, t1: 3.82, a: body, b: body, clip: "die", face: post, up: [0, 0.09] },
+            { t0: 3.82, t1: 3.9, a: body, b: body, clip: "die", face: post, up: [0.09, 0] },
+            { t0: 3.9, t1: 4.9, a: body, b: body, clip: "revive", face: post },
+            { t0: 4.9, t1: 5.4, a: body, b: body, clip: "cheer", face: post },
+          ];
+          return {
+            len: 5.4,
+            cast: [
+              part(me, [
+                { t0: 0, t1: 2, a: post, b: post, clip: "idle", face: step(w) },
+                { t0: 2, t1: 2.3, a: post, b: help, clip: "walk", face: body },
+                { t0: 2.3, t1: 3.9, a: help, b: help, clip: actClip("doctorSaved"), face: body },
+                { t0: 3.9, t1: 4.9, a: help, b: help, clip: "medic", face: body },
+                { t0: 4.9, t1: 5.4, a: help, b: help, clip: "cheer", face: body },
+              ]),
+              shade([
+                { t0: 0.9, t1: 1.5, a: far(w, -1, 3), b: sill(w), clip: "sneak", round: true },
+                { t0: 1.5, t1: 2, a: sill(w), b: far(w, 1, 3), clip: "walk", round: true, s1: 0.35 },
+              ]),
+              part(w, hurt),
+            ],
+            fx: [fx(w, "doctor", 2.6, 5.4)],
+            cues: [
+              { t: 1.4, name: "kill" },
+              { t: 1.5, name: "door" },
+              { t: 2.6, name: "doctor" },
+            ],
+            ...front(w),
+          };
         }
+        const mine: Seg[] = [
+          { t0: 0, t1: L + 0.3, a: step(w), b: step(w), clip: "idle", face: spots[w].house },
+          { t0: L + 0.3, t1: L + 0.8, a: step(w), b: sill(w), clip: "walk", s1: 0 },
+        ];
+        const cast = [part(me, mine)];
+        const effects = [fx(w, "doctor", L + 0.8, 1e9)];
+        const cues: Cue[] = [{ t: L + 0.9, name: "doctor" }];
+        cues.unshift({ t: L + 0.3, name: "door" });
+        const len = L + 2.8;
         effects[0].t1 = len;
         return { len, cast, fx: effects, cues, ...front(w) };
       }
@@ -322,7 +350,7 @@ function write(flash: Flash, seats: Seat[], spots: Spot[], sizes: number[], heig
         const len = t + 2.6;
         return {
           len,
-          cast: [shade(segs), part(me, [pop(me, t + 1.2, step(me)), { t0: t + 1.55, t1: len, a: step(me), b: step(me), clip: actClip("healed"), face: step(me).multiplyScalar(0.5) }])],
+          cast: [shade(segs), part(me, [pop(me, t + 1.2, step(me)), { t0: t + 1.55, t1: len, a: step(me), b: step(me), clip: "cheer", face: step(me).multiplyScalar(0.5) }])],
           fx: [fx(me, "doctor", t + 0.4, len)],
           cues: [
             { t, name: "door" },
@@ -443,7 +471,7 @@ function announce(events: Dawn[], seats: Seat[], spots: Spot[], sizes: number[])
       script.shots.push({ t0: t, pos: out(h).multiplyScalar(-2.4).addScaledVector(side(h), 5.6).setY(4.6), look: step(h).multiplyScalar(0.72).setY(0.6), follow: -1, base: null });
       const fall = t + (e.blast ? 0.6 : 1.3) * k; // 모두가 알아차리는 때
       if (e.blast) {
-        script.fx.push({ t0: fall, t1: fall + 2.4, at: spots[h].house, rot: 0, kind: "burst" }); // 소리와 흔들림은 폭발이 스스로 낸다
+        script.fx.push({ t0: fall, t1: fall + 2.4, at: spots[h].house, rot: spots[h].angle + Math.PI, kind: "burst", house: { file: seats[h].house, color: COLORS[h % COLORS.length] } }); // 소리와 흔들림은 폭발이 스스로 낸다
       } else {
         script.cast.push(
           part(h, [
@@ -591,6 +619,41 @@ const eye = new THREE.Vector3();
 const aim = new THREE.Vector3();
 const here = new THREE.Vector3();
 const DARK = new THREE.Color("#17131c");
+const BLAST_SOOT = new THREE.Color("#332c28");
+
+function BlastHouse({ file, color }: { file: string; color: string }) {
+  const ref = useRef<THREE.Group>(null);
+  const born = useRef(-1);
+  useFrame((state) => {
+    if (!ref.current) return;
+    if (born.current < 0) born.current = state.clock.elapsedTime;
+    const t = state.clock.elapsedTime - born.current;
+    const s =
+      t < 0.1
+        ? 1 + (t / 0.1) * 0.35
+        : t < 0.24
+          ? 1.35 + ((t - 0.1) / 0.14) * (0.85 - 1.35)
+          : t < 0.5
+            ? 0.85 + ((t - 0.24) / 0.26) * 0.15
+            : 1;
+    ref.current.scale.setScalar(s);
+  });
+  return (
+    <group ref={ref}>
+      <Suspense fallback={null}>
+        <Model
+          file={file}
+          paint={(name, m) => {
+            if (name === "Outline") return;
+            if (name === "Roof") m.color.set(color);
+            m.color.lerp(BLAST_SOOT, name === "Roof" ? 0.72 : 0.58);
+            if (name === "Window") m.emissiveIntensity = 0.15;
+          }}
+        />
+      </Suspense>
+    </group>
+  );
+}
 
 // 묘비가 박힐 때 퍼지는 먼지 고리
 function Dust() {
@@ -884,7 +947,10 @@ export function Replay({ flash, call, exile, seats, spots, sizes, heights, doors
         return (
           <group key={i} position={f.at} rotation-y={f.rot}>
             {f.kind === "burst" ? (
-              <Burst />
+              <>
+                {f.house && <BlastHouse file={f.house.file} color={f.house.color} />}
+                <Burst />
+              </>
             ) : f.kind === "dust" ? (
               <Dust />
             ) : f.kind === "shield" ? (
