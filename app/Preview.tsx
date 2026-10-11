@@ -2,7 +2,7 @@
 
 // 꾸미기 창의 내 캐릭터 미리보기. 마을과 같은 모델·색칠 규칙을 쓴다.
 import { Canvas, useFrame } from "@react-three/fiber";
-import { Suspense, useRef } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import type * as THREE from "three";
 import { Model } from "./Village";
 
@@ -17,18 +17,38 @@ function Figure({ skin, hat, color, pose, face = pose === "cheer" ? "happy" : "d
   useFrame((state) => {
     if (turn.current && !CALM && !pose) turn.current.rotation.y = Math.sin(state.clock.elapsedTime * 0.7) * 0.6;
   });
-  const top = hat !== "none" && (
+  const blob = skin === "blob";
+  const top = (
     <Suspense fallback={null}>
-      <Model file={`hat-${hat}`} scale={skin === "blob" ? 1 : 0.8} />
+      {hat !== "none" && <Model file={`hat-${hat}`} scale={blob ? 1 : 0.8} />}
+      {/* 지목당하면 머리 옆에 땀방울 */}
+      {pose === "flinch" && <Model file="prop-sweat" position={blob ? [0.33, -0.08, 0.15] : [0.38, -0.17, 0.15]} />}
+    </Suspense>
+  );
+  // 지목하는 손: 뻗은 팔 끝의 큼직한 장갑. 팔을 뻗기 전에는 숨긴다 (자리와 크기는 3D팀이 잰 값)
+  const [reach, setReach] = useState(false);
+  useEffect(() => {
+    if (pose !== "point") return;
+    const timer = setTimeout(() => setReach(true), 230);
+    return () => clearTimeout(timer);
+  }, [pose]);
+  const glove = reach && (
+    <Suspense fallback={null}>
+      <Model
+        file="prop-point"
+        position={blob ? [-0.1496, 0.0463, 0] : [-0.0948, -0.0853, 0]}
+        quaternion={blob ? [-0.2368, -0.6663, 0.0293, 0.7065] : [0.4465, -0.5483, 0.035, 0.7062]}
+        scale={blob ? 0.526 : 0.435}
+      />
     </Suspense>
   );
   return (
     <group ref={turn} position={[0, pose ? 0 : -0.6, 0]}>
       <Suspense fallback={null}>
         {skin === "blob" ? (
-          <Model file="character-2" clip={clip} face={face} overhead={top} paint={(name, m) => name === "Body" && m.color.set(color)} />
+          <Model file="character-2" clip={clip} face={face} overhead={top} held={glove} paint={(name, m) => name === "Body" && m.color.set(color)} />
         ) : (
-          <Model file={`skins/${skin}`} clip={clip} face={face} overhead={top} />
+          <Model file={`skins/${skin}`} clip={clip} face={face} overhead={top} held={glove} />
         )}
       </Suspense>
     </group>
@@ -92,13 +112,13 @@ export function CutIn({ by, who, still = false }: { by: Look; who: Look; still?:
     <div className={`cutin ${still ? "still" : ""}`} aria-hidden>
       <div className="cut a" style={{ "--c": by.color } as React.CSSProperties}>
         <div className="fig">
-          <Shot who={by} pose="vote" />
+          <Shot who={by} pose="point" />
         </div>
         <b className="bang">!</b>
       </div>
       <div className="cut b" style={{ "--c": who.color } as React.CSSProperties}>
         <div className="fig">
-          <Shot who={who} pose="startle" face="scared" />
+          <Shot who={who} pose="flinch" face="scared" />
         </div>
       </div>
     </div>

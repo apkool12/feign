@@ -1162,15 +1162,54 @@ canvas {
   animation: none;
 }
 
-/* 띠 안의 집중선: 가리키는 쪽에서 퍼져 나간다. 굵기가 다른 두 겹을 겹쳐 고르지 않게 */
+/* 띠의 배경: 가리키는 쪽이 환하게 터지고 끝으로 갈수록 짙어진다. 그 위로 집중선이 퍼지며 흐른다. */
+@property --sweep {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+.cut {
+  background:
+    radial-gradient(ellipse 34% 120% at 28% 58%, rgb(255 255 255 / 0.85) 0, rgb(255 255 255 / 0.35) 38%, transparent 72%),
+    linear-gradient(90deg, color-mix(in srgb, var(--c), black 8%), var(--c) 30%, color-mix(in srgb, var(--c), black 34%));
+}
+.cut.b {
+  background:
+    radial-gradient(ellipse 34% 120% at 72% 58%, rgb(255 255 255 / 0.85) 0, rgb(255 255 255 / 0.35) 38%, transparent 72%),
+    linear-gradient(270deg, color-mix(in srgb, var(--c), black 8%), var(--c) 30%, color-mix(in srgb, var(--c), black 34%));
+}
 .cut::before {
   content: "";
   position: absolute;
   inset: 0;
   background:
-    repeating-conic-gradient(from 3deg at 26% 60%, transparent 0 5deg, rgb(255 255 255 / 0.3) 5deg 6.4deg, transparent 6.4deg 13deg),
-    repeating-conic-gradient(from 0deg at 26% 60%, transparent 0 8deg, rgb(255 255 255 / 0.16) 8deg 11deg, transparent 11deg 17deg);
+    repeating-conic-gradient(from var(--sweep) at 28% 58%, transparent 0 4deg, rgb(255 255 255 / 0.5) 4deg 5.2deg, transparent 5.2deg 9deg, rgb(255 255 255 / 0.22) 9deg 12deg, transparent 12deg 17deg),
+    repeating-conic-gradient(from calc(var(--sweep) * -0.6) at 28% 58%, transparent 0 7deg, color-mix(in srgb, var(--c), black 30%) 7deg 8deg, transparent 8deg 23deg);
+  animation: sweep 0.9s linear infinite;
 }
 .cut.b::before {
   transform: scaleX(-1);
+}
+@keyframes sweep {
+  to { --sweep: 17deg; }
+}
+/* 컷인이 도는 동안 뒤의 마을은 어두워진다 */
+.cutin::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgb(20 16 10 / 0.5);
+  animation: cut-dim 2.8s both;
+}
+.cutin.still::before {
+  animation: none;
+}
+@keyframes cut-dim {
+  0%, 100% { opacity: 0; }
+  6%, 94% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cut::before {
+    animation: none;
+  }
 }
