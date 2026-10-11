@@ -554,6 +554,13 @@ export function channel(room: Room, p: Player): Channel | null {
   return "all";
 }
 
+// 감정표현은 유언을 소모하지 않는 몸짓이라, 대화 범위(channel)와 다르다.
+export function emoteTo(room: Room, p: Player): Channel | null {
+  if (room.phase === "night") return null;
+  if (room.phase === "day" && !p.alive) return "dead";
+  return "all";
+}
+
 // me가 그 범위의 말을 볼 수 있는가. 끝나면 비밀 대화도 전부 공개한다.
 export function hears(room: Room, me: Player, to: Channel): boolean {
   const spoiled = !me.alive && !me.will; // 유언을 남길 수 있는 동안에는 비밀을 볼 수 없다

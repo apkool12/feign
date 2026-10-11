@@ -10,6 +10,7 @@ import {
   channel,
   configure,
   deal,
+  emoteTo,
   hears,
   newPlayer,
   newRoom,
@@ -373,6 +374,23 @@ for (let n = 4; n <= 10; n++) {
   dead.will = true; // 유언을 쓰기 전에는 저승 대화를 못 보고, 쓰는 말은 모두에게 간다
   assert.equal(channel(r, dead), "all");
   assert.ok(!hears(r, dead, "dead"));
+}
+
+// 감정표현은 유언과 무관하다: 낮·대기실·종료 뒤는 전체, 밤은 금지, 죽은 사람은 죽은 사람끼리만
+{
+  const r = room("imp:cleaner", "doctor", "lookout", "tracker");
+  const [, doc, dead] = r.players;
+  assert.equal(emoteTo(r, doc), null);
+  r.phase = "lobby";
+  assert.equal(emoteTo(r, doc), "all");
+  r.phase = "day";
+  assert.equal(emoteTo(r, doc), "all");
+  dead.alive = false;
+  dead.will = true;
+  assert.equal(emoteTo(r, dead), "dead");
+  r.phase = "ended";
+  assert.equal(emoteTo(r, doc), "all");
+  assert.equal(emoteTo(r, dead), "all");
 }
 
 // 대화: 밤에는 임포스터 편끼리만, 죽은 사람은 죽은 사람끼리만 보인다

@@ -14,6 +14,7 @@ const handle = app.getRequestHandler();
 
 const rooms = new Map<string, G.Room>();
 const sockets = new Map<WebSocket, { room: G.Room; player: G.Player }>();
+const lastEmote = new WeakMap<G.Player, number>();
 
 const send = (ws: WebSocket, msg: object) => ws.send(JSON.stringify(msg));
 const hasConnection = (room: G.Room) => room.players.some((p) => p.connected);
@@ -156,6 +157,19 @@ function onMessage(ws: WebSocket, m: Record<string, unknown>): string | void {
       if (!to || typeof m.on !== "boolean") return;
       const msg = JSON.stringify({ t: "typing", id: player.id, on: m.on });
       for (const [other, o] of sockets) if (o.room === room && other !== ws && G.hears(room, o.player, to)) other.send(msg);
+      return;
+    }
+    case "emote": {
+      // 감정표현. 저장하지 않고 보이는 사람에게만 한 줄 중계한다.
+      const k = m.k;
+      if (typeof k !== "number" || !Number.isInteger(k) || k < 0 || k > 7) return "알 수 없는 감정표현이에요";
+      const to = G.emoteTo(room, player);
+      if (!to) return;
+      const now = Date.now();
+      if (now - (lastEmote.get(player) ?? -Infinity) < 300) return; // 연타만 막는다. 다른 감정표현으로 바로 바꾸는 것은 된다
+      lastEmote.set(player, now);
+      const msg = JSON.stringify({ t: "emote", id: player.id, k });
+      for (const [other, o] of sockets) if (o.room === room && G.hears(room, o.player, to)) other.send(msg);
       return;
     }
     case "setup": {
