@@ -76,16 +76,20 @@ export function Lineup({ people }: { people: (Look & { won: boolean })[] }) {
 // 밀고자의 지목: 화면을 가로지르는 컷인 두 장. 먼저 밀고자가 팔을 들고 느낌표가 찍히고, 이어서 지목당한 사람의 당황한 얼굴이 나온다.
 function Shot({ who, pose, face }: { who: Look; pose: string; face?: string }) {
   return (
-    <Canvas dpr={[1, 2]} camera={{ fov: 30, position: [0, 0.62, 2.3] }} gl={{ alpha: true }}>
+    <Canvas dpr={[1, 2]} camera={{ fov: 30, position: [0, 0, 3] }} gl={{ alpha: true }}>
       <ambientLight intensity={1.7} />
       <directionalLight position={[3, 5, 4]} intensity={1.8} />
-      <Figure {...who} pose={pose} face={face} />
+      {/* 카메라는 원점을 본다. 발이 칸의 아랫선 바로 위에 오도록 내려 세운다 */}
+      <group position-y={-0.7}>
+        <Figure {...who} pose={pose} face={face} />
+      </group>
     </Canvas>
   );
 }
-export function CutIn({ by, who }: { by: Look; who: Look }) {
+// still이면 두 장을 멈춘 채 위아래로 나란히 둔다 (모양을 맞출 때 쓴다)
+export function CutIn({ by, who, still = false }: { by: Look; who: Look; still?: boolean }) {
   return (
-    <div className="cutin" aria-hidden>
+    <div className={`cutin ${still ? "still" : ""}`} aria-hidden>
       <div className="cut a" style={{ "--c": by.color } as React.CSSProperties}>
         <div className="fig">
           <Shot who={by} pose="vote" />

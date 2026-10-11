@@ -1103,17 +1103,18 @@ canvas {
   transform: translateX(110%) skewY(4deg);
   animation: cut-b 1.5s 1.3s cubic-bezier(0.2, 0.9, 0.2, 1) both;
 }
+/* 캐릭터는 띠의 아랫선을 딛고 서고, 머리와 모자는 띠 위로 튀어나온다 */
 .cut .fig {
   position: absolute;
-  left: 22%;
-  top: -18%;
-  width: 46vh;
-  height: 136%;
+  left: 30%;
+  bottom: 0;
+  width: 60vh;
+  height: 160%;
+  margin-left: -30vh;
   transform: skewY(4deg);
 }
 .cut.b .fig {
-  left: auto;
-  right: 22%;
+  left: 70%;
   transform: skewY(-4deg);
 }
 .cut .bang {
@@ -1147,4 +1148,29 @@ canvas {
 /* 켜 둔 동그란 단추 (마이크) */
 .ib[aria-pressed="true"] {
   background: var(--sun);
+}
+.cutin.still .cut {
+  top: 8vh;
+  animation: none;
+  transform: skewY(-4deg);
+}
+.cutin.still .cut.b {
+  top: 56vh;
+  transform: skewY(4deg);
+}
+.cutin.still .bang {
+  animation: none;
+}
+
+/* 띠 안의 집중선: 가리키는 쪽에서 퍼져 나간다. 굵기가 다른 두 겹을 겹쳐 고르지 않게 */
+.cut::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-conic-gradient(from 3deg at 26% 60%, transparent 0 5deg, rgb(255 255 255 / 0.3) 5deg 6.4deg, transparent 6.4deg 13deg),
+    repeating-conic-gradient(from 0deg at 26% 60%, transparent 0 8deg, rgb(255 255 255 / 0.16) 8deg 11deg, transparent 11deg 17deg);
+}
+.cut.b::before {
+  transform: scaleX(-1);
 }
