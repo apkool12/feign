@@ -170,12 +170,14 @@ export function Doorway({ house, open }: { house: string; open: RefObject<number
 // 집 모델에서 문짝(재질 이름이 Door…인 메시)을 찾아 왼쪽 모서리를 축으로 돌 수 있게 만든다. 손잡이도 함께 붙인다.
 export function hinge(root: THREE.Object3D): THREE.Object3D | undefined {
   let door: THREE.Mesh | undefined;
+  const outlines: THREE.Mesh[] = [];
   const knobs: THREE.Mesh[] = [];
   root.traverse((o) => {
     if (!(o instanceof THREE.Mesh)) return;
     const name = (o.material as THREE.Material).name;
     if (name.startsWith("Door")) door = o;
     else if (name === "Knob") knobs.push(o);
+    else if (name === "Outline") outlines.push(o);
   });
   if (!door) return;
   root.updateMatrixWorld(true);
@@ -184,6 +186,39 @@ export function hinge(root: THREE.Object3D): THREE.Object3D | undefined {
   const box = door.geometry.boundingBox!.clone();
   const x = box.min.x;
   const z = (box.min.z + box.max.z) / 2;
+  // 외곽선 껍질은 집 전체가 한 덩어리다. 문짝과 손잡이를 두른 조각만 떼어 문에 붙여야, 문이 열릴 때 테두리가 제자리에 남지 않는다.
+  const outline = outlines.find((o) => o.parent === door!.parent); // 풍차 날개처럼 다른 부분의 껍질은 아니다
+  const shell = outline ? outline.geometry.toNonIndexed() : null;
+  if (shell) {
+    const near = box.clone().expandByScalar(0.04);
+    near.max.z += 0.14; // 앞으로 튀어나온 손잡이까지
+    const at = shell.attributes.position;
+    const nor = shell.attributes.normal;
+    const keep: number[][] = [[], []];
+    const mine: number[][] = [[], []];
+    const v = new THREE.Vector3();
+    for (let i = 0; i < at.count; i += 3) {
+      let inside = true;
+      for (let k = 0; k < 3; k++) inside &&= near.containsPoint(v.fromBufferAttribute(at, i + k));
+      const to = inside ? mine : keep;
+      for (let k = 0; k < 3; k++) {
+        to[0].push(at.getX(i + k), at.getY(i + k), at.getZ(i + k));
+        if (nor) to[1].push(nor.getX(i + k), nor.getY(i + k), nor.getZ(i + k));
+      }
+    }
+    if (mine[0].length) {
+      const made = (part: number[][]) => {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute("position", new THREE.Float32BufferAttribute(part[0], 3));
+        if (part[1].length) g.setAttribute("normal", new THREE.Float32BufferAttribute(part[1], 3));
+        return g;
+      };
+      outline!.geometry = made(keep);
+      const rim = new THREE.Mesh(made(mine).translate(-x, 0, -z), outline!.material);
+      rim.castShadow = outline!.castShadow;
+      door.add(rim);
+    }
+  }
   door.geometry.translate(-x, 0, -z);
   door.position.x += x;
   door.position.z += z;
