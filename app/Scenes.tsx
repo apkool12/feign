@@ -1054,7 +1054,7 @@ export function Replay({ flash, call, exile, seats, spots, sizes, heights, doors
   );
 }
 
-const SAID: Record<string, string> = { blocked: "문 앞이 막혔다", trapped: "덫에 걸렸다", raided: "습격당했다", healed: "의사가 다녀갔다", provoked: "누가 선동했다", slain: "쓰러졌다", rescued: "의사가 살려 냈다" };
+const SAID: Record<string, string> = { blocked: "문 앞이 막혔습니다", trapped: "덫에 걸렸습니다", raided: "습격당했습니다", healed: "의사가 다녀갔습니다", provoked: "누군가 선동했습니다", slain: "쓰러졌습니다", rescued: "의사가 살렸습니다" };
 
 // 화면 아래 글. 회상(flash)이면 "어젯밤" 딱지와 끝의 정리 줄들, 아침 발표(call)면 지금 보는 사건 한 줄.
 // beat는 지금까지 넘어간 글의 번호(-1이면 아직 없음).
@@ -1085,19 +1085,19 @@ export function ReplayHud({ flash, call, exile, seats, beat, calm }: { flash: Fl
   const line = (s: Scene) => {
     switch (s.kind) {
       case "lookout":
-        return [s.visitors.length ? s.visitors.map(head) : <span key="x">아무도 안 옴</span>, to, head(s.house)];
+        return [s.visitors.length ? s.visitors.map(head) : <span key="x">아무도 오지 않았습니다</span>, to, head(s.house)];
       case "tracker":
-        return [head(s.who), to, s.went.length ? s.went.map(head) : <span key="x">{s.out ? "들른 집 없음" : "안 나감"}</span>];
+        return [head(s.who), to, s.went.length ? s.went.map(head) : <span key="x">{s.out ? "들른 집이 없습니다" : "나가지 않았습니다"}</span>];
       case "blocker":
-        return [head(s.who), <span key="x">{s.tried ? "나가려 했다" : "조용했다"}</span>];
+        return [head(s.who), <span key="x">{s.tried ? "나가려 했습니다" : "조용했습니다"}</span>];
       case "trapper":
-        return [head(s.house), <span key="x">{s.caught ? "덫에 누가 걸렸다" : "덫은 그대로"}</span>];
+        return [head(s.house), <span key="x">{s.caught ? "덫에 누군가 걸렸습니다" : "덫에 아무도 걸리지 않았습니다"}</span>];
       case "investigator":
         return [head(s.who), to, tile(s.options[0].role, s.options[0].team, 0), <span key="or">또는</span>, tile(s.options[1].role, s.options[1].team, 1)];
       case "snitch":
-        return [head(s.who), to, s.role ? tile(s.role, s.team) : <span key="x">못 들었다</span>];
+        return [head(s.who), to, s.role ? tile(s.role, s.team) : <span key="x">듣지 못했습니다</span>];
       case "doctor":
-        return [head(s.who), <span key="x">{s.saved ? "지켜냈다" : "조용한 밤"}</span>];
+        return [head(s.who), <span key="x">{s.saved ? "지켰습니다" : "조용한 밤"}</span>];
       case "thief":
         return [head(s.who), to, s.stolen ? tile(s.stolen.role, s.stolen.team) : <span key="x">빈손</span>];
       default:
@@ -1139,7 +1139,7 @@ export function ReplayHud({ flash, call, exile, seats, beat, calm }: { flash: Fl
   if (!call) return null;
   const me = seats.find((s) => s.isMe)?.id;
   const told = (e: Dawn) => {
-    if (e.kind === "death") return [head(e.who), <span key="d">{e.blast ? "집이 터졌다" : e.bolt ? "번개를 맞았다" : "쓰러졌다"}</span>, shown(e.reveal)];
+    if (e.kind === "death") return [head(e.who), <span key="d">{e.blast ? "집이 터졌습니다" : e.bolt ? "번개에 맞았습니다" : "쓰러졌습니다"}</span>, shown(e.reveal)];
     // 알아낸 역할은 밀고자 본인만 안다
     const mine = e.by === me ? call.mine.find((s) => s.kind === "snitch" && s.who === e.who) : undefined;
     return [head(e.by), to, head(e.who), mine?.kind === "snitch" && mine.role ? tile(mine.role, mine.team, 9) : null];
