@@ -11,7 +11,7 @@ import { clone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { Bubble } from "./Bubble";
 import { COLORS } from "./colors";
 import { bedtime, casting, doorOpen, Doorway, DOORS, hinge, indoors, late, sky, tick, turn, useDark, useTurn } from "./Dusk";
-import { AbilityEffect, Bomb, Burning, Burst, Candle, RoleIcon, Shield } from "./Effects";
+import { AbilityEffect, Bomb, Burning, Burst, Candle, HeldBroom, RoleIcon, Shield } from "./Effects";
 import { Fire } from "./Fire";
 import { Post, Veil, toon } from "./Look";
 import { Replay, ReplayHud } from "./Scenes";
@@ -50,8 +50,11 @@ interface Props {
   iconRole: string | null; // 능력을 쓰는 동안 머리 위에 띄울 역할 그림
   shield: boolean; // 오늘 밤 갑옷을 입기로 했다
   actKind?: string | null; // 내 차례가 지난 뒤 보여 줄 몸짓
+  standKind?: string | null; // 고른 집 앞에서 어느 자리로 설지
   positions: RefObject<Positions>; // 다른 플레이어들이 보내 온 위치
   demo?: boolean; // 메뉴 배경: 조작 없이 카메라가 스스로 돈다 (이름이 빈 자리는 이름표도 없다)
+  hud?: boolean; // 회상·발표 밑의 글을 보일지
+  heldTools?: boolean; // 손에 쥐는 도구 견본을 쓸지
   replay?: Flash | null; // 어젯밤 회상: 이 장면이 도는 동안 마을은 밤으로 돌아가고 평소의 캐릭터들은 물러난다
   onReplayEnd?: () => void;
   exile?: Exile | null; // 추방: 풍선에 실려 날아가고 묘비가 떨어진다 (낮이 끝난 직후, 모두가 본다)
@@ -205,12 +208,12 @@ type ActKind = Role | Extract<Mode, "kill" | "detonate" | "armor"> | "doctorSave
 export const ACT_CLIP = {
   doctor: "medic",
   doctorSaved: "cpr",
-  healed: "revive",
+  healed: "cheer",
   blocker: "halt",
   lookout: "spy",
   investigator: "inspect",
   trapper: "settrap",
-  snitch: "point",
+  snitch: "peek",
   snitchTarget: "flinch",
   provoker: "shout",
   tracker: "track",
@@ -227,12 +230,36 @@ export const ACT_CLIP = {
   armor: "brace",
 } as const satisfies Record<ActKind, string>;
 
-const LOOP_ACT_CLIPS = new Set(["cpr", "halt", "spy", "shout", "sweep", "press", "candle"]);
+const LOOP_ACT_CLIPS = new Set(["cpr", "halt", "spy", "shout", "sweep", "paint", "brace", "steal"]);
 export function actClip(kind: string | null | undefined) {
   return kind && Object.hasOwn(ACT_CLIP, kind) ? ACT_CLIP[kind as ActKind] : "cast";
 }
 function actSecs(kind: string | null | undefined) {
-  return LOOP_ACT_CLIPS.has(actClip(kind)) ? 2.4 : 1.2;
+  return LOOP_ACT_CLIPS.has(actClip(kind)) ? 6 : 2;
+}
+
+const ACT_STAND: Partial<Record<ActKind, { x: number; z: number }>> = {
+  doctor: { x: 0.4, z: 2.6 },
+  blocker: { x: 0, z: 2.8 },
+  investigator: { x: 0, z: 2.3 },
+  trapper: { x: 0, z: 2.8 },
+  snitch: { x: 0.85, z: 2.3 },
+  provoker: { x: 0.5, z: 3.9 },
+  cleaner: { x: 0, z: 2.6 },
+  blamer: { x: 0.9, z: 2.9 },
+  serialKiller: { x: 0, z: 2.4 },
+  bomber: { x: -1.5, z: 2.3 },
+  thief: { x: 0.6, z: 2.5 },
+  sorcerer: { x: 0, z: 2.8 },
+  haunter: { x: 0, z: 3.1 },
+  kill: { x: 0, z: 2.4 },
+};
+
+function actStand(kind: string | null | undefined, spot: Spot, house: string) {
+  const p = kind && Object.hasOwn(ACT_STAND, kind) ? ACT_STAND[kind as ActKind] : null;
+  if (!p) return spot.door;
+  const z = p.z + ((DOORS[house]?.z ?? 1.09) - 1.09);
+  return new THREE.Vector3(p.x, 0, z).applyAxisAngle(UP, spot.angle + Math.PI).add(spot.house);
 }
 
 // glb 모델 하나. 인스턴스마다 재질을 따로 가져서, paint로 재질 이름별 색을 바꿀 수 있다
@@ -240,7 +267,7 @@ function actSecs(kind: string | null | undefined) {
 // 뼈대가 있는 모델(캐릭터)은 clip이 가리키는 동작을 재생하고, 표정 하나만 보이며(동작에 짝지은 표정이 face보다 먼저다), overhead를 머리 위 기준점에 붙인다.
 type ModelProps = { file: string; paint?: Paint; clip?: RefObject<string>; face?: string; overhead?: ReactNode; held?: ReactNode; door?: RefObject<number> }; // held는 오른팔 뼈(armR)에 붙는다
 const ONCE = new Set(["vote", "startle", "turn", "die", "cast", "yawn", ...Object.values(ACT_CLIP).filter((name) => !LOOP_ACT_CLIPS.has(name))]); // 한 번 하고 마지막 자세로 멈추는 동작
-const FACE: Record<string, string> = { cheer: "happy", startle: "surprised", die: "dead", sad: "scared", yawn: "sleepy" }; // 동작과 짝인 표정
+const FACE: Record<string, string> = { cheer: "happy", startle: "surprised", die: "dead", sad: "scared", yawn: "sleepy", revive: "surprised", flinch: "scared", press: "scared", paint: "happy", steal: "happy" }; // 동작과 짝인 표정
 const STEP = 1 / 60; // 자세 갱신 간격 (클립 키 사이는 보간된다)
 const THIN = 0.025; // 집 외곽선 껍데기(두께 약 0.045)를 이만큼 안으로 당긴다
 
@@ -330,7 +357,7 @@ export function Model({ file, paint, clip, face = "default", overhead, held, doo
     });
     return found;
   }, [scene]);
-  const hand = useMemo(() => scene.getObjectByName("armR"), [scene]);
+  const hand = useMemo(() => scene.getObjectByName("handR") ?? scene.getObjectByName("hand.R") ?? scene.getObjectByName("armR") ?? scene.getObjectByName("arm.R"), [scene]);
   return (
     <>
       <primitive object={scene} {...props} />
@@ -341,6 +368,7 @@ export function Model({ file, paint, clip, face = "default", overhead, held, doo
 }
 
 const GRAY = new THREE.Color("#7d7a76");
+const SOOT = new THREE.Color("#3f3a36");
 
 // 모델 파일이 없을 때(예: 저장소에 올리지 않는 캐릭터) 대신 보여 줄 것을 정한다
 class Fallback extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
@@ -631,7 +659,7 @@ function Done({ y }: { y: number }) {
   );
 }
 
-function House({ seat, color, spot, night, wait, burnt = false, onPick }: { seat: Seat; color: string; spot: Spot; night: boolean; wait: number; burnt?: boolean; onPick: (id: string) => void }) {
+function House({ seat, color, spot, night, wait, burnt = false, heldTools = true, onPick }: { seat: Seat; color: string; spot: Spot; night: boolean; wait: number; burnt?: boolean; heldTools?: boolean; onPick: (id: string) => void }) {
   const [hover, setHover] = useState(false);
   // 창문 불은 주인이 들어간 뒤에 켜지고, 아침에는 나오기 전에 꺼진다
   const [home, setHome] = useState(night);
@@ -649,9 +677,9 @@ function House({ seat, color, spot, night, wait, burnt = false, onPick }: { seat
   const hadBomb = useRef(seat.bombed);
   const [booms, setBooms] = useState(0);
   useEffect(() => {
-    if (hadBomb.current && !seat.bombed) setBooms((n) => n + 1);
+    if (hadBomb.current && !seat.bombed && !burnt) setBooms((n) => n + 1);
     hadBomb.current = seat.bombed;
-  }, [seat.bombed]);
+  }, [seat.bombed, burnt]);
   const shape = shapeOf(seat.house);
   const paint: Paint = (name, m) => {
     if (name === "Outline") return; // 외곽선 껍데기는 늘 먹색
@@ -662,6 +690,10 @@ function House({ seat, color, spot, night, wait, burnt = false, onPick }: { seat
       if (lit) m.color.set("#ffe9a3");
     }
     if (!seat.alive) m.color.lerp(GRAY, 0.75); // 주인이 죽은 집은 빛이 바랜다
+    if (burnt) {
+      m.color.lerp(SOOT, name === "Roof" ? 0.7 : 0.55);
+      if (name === "Window") m.emissiveIntensity *= 0.15;
+    }
   };
   const model = (file: string) => (
     <Model file={file} scale={hover && seat.enabled ? 1.05 : 1} {...pickable(seat, onPick, setHover)} paint={paint} door={door} />
@@ -681,7 +713,7 @@ function House({ seat, color, spot, night, wait, burnt = false, onPick }: { seat
         )}
       </Suspense>
       {seat.mark && <Ring key={seat.mark} color={MARK[seat.mark]} />}
-      {seat.effect && <AbilityEffect kind={seat.effect} h={shape.h} door={DOORS[seat.house]?.z} />}
+      {seat.effect && <AbilityEffect kind={seat.effect} h={shape.h} door={DOORS[seat.house]?.z} held={heldTools && seat.effect === "cleaner"} />}
       {burnt && <Burning h={shape.h} flames={false} />}
       {seat.effect && seat.effect !== "kill" && seat.effect !== "detonate" && <RoleIcon role={seat.effect} y={shape.h + 2.9} size={0.85} />}
       {booms > 0 && <Burst key={booms} />}
@@ -707,7 +739,7 @@ function House({ seat, color, spot, night, wait, burnt = false, onPick }: { seat
 const TINT = new THREE.Color();
 
 // 캐릭터의 생김새. ghost면 죽은 뒤의 내 모습(나에게만 보인다)인 유령을 그린다.
-export function Body({ seat, color, clip, ghost = false }: { seat: Seat; color: string; clip: RefObject<string>; ghost?: boolean }) {
+export function Body({ seat, color, clip, ghost = false, held }: { seat: Seat; color: string; clip: RefObject<string>; ghost?: boolean; held?: ReactNode }) {
   if (ghost)
     return (
       <>
@@ -737,7 +769,7 @@ export function Body({ seat, color, clip, ghost = false }: { seat: Seat; color: 
       </Pop>
     </Suspense>
   );
-  const look = { clip, overhead: crown, face: !seat.alive ? "dead" : seat.won ? "happy" : "default" };
+  const look = { clip, overhead: crown, held, face: !seat.alive ? "dead" : seat.won ? "happy" : "default" };
   const blob = (
     <Model
       file="character-2"
@@ -784,6 +816,10 @@ function walk(g: THREE.Group, x: number, z: number, dt: number, quick: number) {
   g.position.z += dz * k;
   if (moving) turnTo(g, Math.atan2(dx, dz), Math.min(1, dt * 10));
   return moving;
+}
+
+function samePoint(a: THREE.Vector3, b: THREE.Vector3) {
+  return Math.hypot(a.x - b.x, a.z - b.z) < 0.04;
 }
 
 // 캐릭터가 가만히 있을 때의 동작을 고른다.
@@ -949,27 +985,44 @@ type MeProps = {
   iconRole: string | null;
   shield: boolean;
   actKind: string | null;
+  heldTools: boolean;
   land: Plan;
   collide: (position: THREE.Vector3, solid: boolean) => void; // 건물·나무·물·다른 캐릭터에 겹치지 않게 밀어낸다
   controls: RefObject<OrbitControls | null>;
+  onActStart: () => void;
   onMove: (x: number, z: number) => void;
 };
 
 // 내 캐릭터. WASD나 방향키로 직접 움직이고, 페이즈가 바뀌거나 집을 고르면 그리로 알아서 걸어간다.
-function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night, shock, sad, iconRole, shield, actKind, land, collide, controls, onMove }: MeProps) {
+function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night, shock, sad, iconRole, shield, actKind, heldTools, land, collide, controls, onActStart, onMove }: MeProps) {
   const ref = useRef<THREE.Group>(null);
   const bed = useRef({ at: turn.at, from: new THREE.Vector3() });
   const puff = useRef<THREE.Group>(null);
   const keys = useKeys();
   const manual = useRef(false);
-  const lastTo = useRef(to);
+  const lastTo = useRef(to.clone());
   const clip = useRef("idle");
   const act = useRef(newAct(seat, shock));
-  const knock = useRef({ cast: -1, done: to, act: null as string | null }); // 고른 집에 도착하면 문을 두드리고, 능력이면 이어서 몸짓을 한다
+  const knock = useRef({ cast: -1, done: new THREE.Vector3(Infinity, 0, Infinity), act: null as string | null }); // 고른 집에 도착하면 문을 두드리고, 능력이면 이어서 몸짓을 한다
   const pace = useRef(0); // 다음 발소리가 날 시각
   const sent = useRef({ x: Infinity, z: Infinity, t: 0 }); // 마지막으로 보낸 위치
   const death = useDeath(seat.alive);
   const [gone, setGone] = useState(!seat.alive);
+  const held = useRef<string | null>(null);
+  const [heldKind, setHeldKind] = useState<string | null>(null);
+  const showHeld = (kind: string | null) => {
+    const next = heldTools && kind === "cleaner" ? kind : null;
+    if (held.current === next) return;
+    held.current = next;
+    setHeldKind(next);
+  };
+  const startAct = (kind: string, t: number) => {
+    knock.current.act = kind;
+    knock.current.cast = -1;
+    cut(act.current, actClip(kind), t, actSecs(kind));
+    showHeld(kind);
+    onActStart();
+  };
   useLayoutEffect(() => {
     ref.current?.position.set((start ?? to).x, 0, (start ?? to).z);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -982,8 +1035,8 @@ function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night
     if (just) puff.current?.position.copy(g.position);
     spread(puff.current, progress);
 
-    if (lastTo.current !== to) {
-      lastTo.current = to;
+    if (!samePoint(lastTo.current, to)) {
+      lastTo.current.copy(to);
       manual.current = false; // 새 목적지가 생기면 다시 알아서 걷는다
     }
     const k = keys.current;
@@ -1036,30 +1089,36 @@ function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night
     } else if (!manual.current) {
       moving = walk(g, to.x, to.z, dt, 2.5);
       collide(g.position, seat.alive); // 알아서 걸을 때도 건물과 사람을 돌아서 간다
-      if (!moving && visiting && knock.current.done !== to) {
-        knock.current.done = to;
-        knock.current.act = actKind;
-        knock.current.cast = actKind ? t + 1.1 : -1;
-        cut(act.current, "knock", t, 1.1);
-        play("knock");
+      if (!moving && visiting && !samePoint(knock.current.done, to)) {
+        knock.current.done.copy(to);
+        if (actKind) startAct(actKind, t);
+        else {
+          knock.current.act = null;
+          knock.current.cast = -1;
+          cut(act.current, "knock", t, 1.1);
+          play("knock");
+        }
       }
     }
     const arrived = knock.current;
-    if (moving) arrived.cast = -1;
+    if (moving) {
+      arrived.cast = -1;
+      showHeld(null);
+    }
     if (!actKind) {
       arrived.act = null;
       arrived.cast = -1;
-    } else if (!moving && arrived.act !== actKind && (!visiting || arrived.done === to)) {
-      arrived.act = actKind;
-      if (visiting) arrived.cast = t + 0.15;
-      else cut(act.current, actClip(actKind), t, actSecs(actKind));
+      showHeld(null);
+    } else if (!moving && arrived.act !== actKind && (!visiting || samePoint(g.position, to))) {
+      startAct(actKind, t);
     }
     if (arrived.cast > 0 && t > arrived.cast) {
       arrived.cast = -1;
-      cut(act.current, actClip(actKind), t, actSecs(actKind)); // 능력을 쓴다
+      if (actKind) startAct(actKind, t); // 능력을 쓴다
     }
     const calm = show ?? acting(act.current, seat, shock, sad, t, moving, night);
     clip.current = progress < 1 ? "die" : !seat.alive ? (moving ? "walk" : "idle") : calm; // 죽은 뒤는 유령의 동작
+    if (held.current && (moving || t >= act.current.until || act.current.name !== actClip(actKind))) showHeld(null);
     if (gone !== (!seat.alive && progress >= 1)) setGone(!gone); // 쓰러지는 연출이 끝나면 유령으로 바뀐다
     g.position.y = lift(land, g.position.x, g.position.z);
     if (moving && seat.alive && g.visible && t > pace.current) {
@@ -1084,7 +1143,7 @@ function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night
   return (
     <>
       <group ref={ref}>
-        <Body seat={seat} color={color} clip={clip} ghost={gone} />
+        <Body seat={seat} color={color} clip={clip} ghost={gone} held={heldKind === "cleaner" ? <HeldBroom /> : null} />
         {iconRole && <RoleIcon role={iconRole} y={2} />}
         {shield && <Shield />}
       </group>
@@ -1093,11 +1152,13 @@ function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night
   );
 }
 
-export default function Village({ seats, scene, going, iconRole, shield, actKind = null, positions, demo = false, replay = null, onReplayEnd, call = null, onCallEnd, exile = null, onExileEnd, unseen = [], burnt = [], onSeen, onPick, onMove }: Props) {
+export default function Village({ seats, scene, going, iconRole, shield, actKind = null, standKind = null, positions, demo = false, hud = true, heldTools = true, replay = null, onReplayEnd, call = null, onCallEnd, exile = null, onExileEnd, unseen = [], burnt = [], onSeen, onPick, onMove }: Props) {
   const n = seats.length;
   const spots = useMemo(() => layout(n), [n]);
   const [beat, setBeat] = useState(-1); // 회상·발표의 화면 아래 글이 어디까지 넘어갔나
   useEffect(() => setBeat(-1), [replay, call, exile]);
+  const [actReady, setActReady] = useState(false);
+  useEffect(() => setActReady(false), [scene, going, actKind, standKind]);
   // 추방 장면이 끝나면 사람들은 장면의 마지막 자리(물러선 광장)에서 이어받아, 거기서부터 집으로 돌아간다
   const scattered = useRef(false);
   if (exile) scattered.current = true;
@@ -1108,7 +1169,8 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
   useTurn(night ? "night" : scene, !demo); // 회상이 도는 동안은 아직 밤이다. 끝나면 아침이 온다.
   const dark = useDark(night); // 모닥불 불빛과 화면 가장자리 그늘은 하늘이 반쯤 넘어갔을 때 바뀐다
   const radius = ringRadius(n);
-  const goingTo = spots[seats.findIndex((s) => s.id === going)];
+  const goingIndex = seats.findIndex((s) => s.id === going);
+  const goingTo = spots[goingIndex];
   const controls = useRef<OrbitControls | null>(null);
   const bodies = useRef(new Map<string, THREE.Vector3>());
   const land = useMemo(() => plan(n, radius), [n, radius]);
@@ -1151,9 +1213,11 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
       <Atmosphere night={night} />
       <Post night={night} />
       <Scenery n={n} night={dark} land={land} props={props} />
-      {seats.map((seat, i) => (
-        <House key={seat.id} seat={unseen.includes(seat.id) ? { ...seat, alive: true } : seat} color={COLORS[i % COLORS.length]} spot={spots[i]} night={night} wait={late(i)} burnt={burnt.includes(seat.id) && !unseen.includes(seat.id)} onPick={onPick} />
-      ))}
+      {seats.map((seat, i) => {
+        const hidden = night && !!actKind && seat.id === going && !!seat.effect && !actReady;
+        const shown = { ...seat, ...(unseen.includes(seat.id) ? { alive: true } : {}), ...(hidden ? { effect: null } : {}) };
+        return <House key={seat.id} seat={shown} color={COLORS[i % COLORS.length]} spot={spots[i]} night={night} wait={late(i)} burnt={burnt.includes(seat.id) && !unseen.includes(seat.id)} heldTools={heldTools} onPick={onPick} />;
+      })}
       {replay && (
         <Replay
           flash={replay}
@@ -1206,7 +1270,8 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
         // 밤에는 집 앞(내가 고른 집이 있으면 그 집 앞), 낮에는 광장에 모인다
         const home = scene === "lobby" || night ? spots[i].door : spots[i].plaza;
         if (seat.isMe) {
-          const to = night && goingTo ? goingTo.door : home;
+          const targetHouse = goingIndex >= 0 ? seats[goingIndex].house : seat.house;
+          const to = night && goingTo ? actStand(standKind ?? actKind, goingTo, targetHouse) : home;
           return (
             <Me
               start={scattered.current ? spots[i].plaza.clone().multiplyScalar(1.4) : undefined}
@@ -1224,9 +1289,11 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
               iconRole={iconRole}
               shield={shield}
               actKind={actKind}
+              heldTools={heldTools}
               land={land}
               collide={collide}
               controls={controls}
+              onActStart={() => setActReady(true)}
               onMove={onMove}
             />
           );
@@ -1238,7 +1305,7 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
       })}
     </Canvas>
     <Veil night={dark} />
-    {(replay || call || exile) && <ReplayHud flash={replay} call={call} exile={exile} seats={seats} beat={beat} calm={CALM} />}
+    {hud && (replay || call || exile) && <ReplayHud flash={replay} call={call} exile={exile} seats={seats} beat={beat} calm={CALM} />}
     </>
   );
 }

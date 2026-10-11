@@ -682,17 +682,40 @@ function Footprints() {
   );
 }
 
+function Broom() {
+  return (
+    <>
+      <P g={cyl(0.03, 0.03, 1.25, 6)} c="#b9814a" position={[0, -0.6, 0]} />
+      <P g={box(0.5, 0.1, 0.14)} c="#8a5a30" position={[0, -1.22, 0]} />
+      <P g={box(0.46, 0.24, 0.12)} c="#e8c25a" position={[0, -1.38, 0]} />
+      {[-0.14, 0, 0.14].map((x) => (
+        <L key={x} g={box(0.014, 0.22, 0.125)} c="#a8822c" position={[x, -1.38, 0]} />
+      ))}
+    </>
+  );
+}
+
+export function HeldBroom() {
+  return (
+    <group position={[0.02, -0.08, 0.02]} rotation={[0.08, 0.06, -0.16]} scale={0.58}>
+      <Broom />
+    </group>
+  );
+}
+
 // 청소부: 빗자루가 문 앞을 쓸고, 바닥의 흔적이 하나씩 지워지며 반짝인다. 곁에는 물 양동이.
-function Sweep() {
+function Sweep({ held = false }: { held?: boolean }) {
   const [p, at] = useParts();
   const age = useAge();
   useFrame((s) => {
     const T = s.clock.elapsedTime;
     const t = age(T);
-    if (!p.broom) return;
-    p.broom.scale.setScalar(pop(seg(t, 0, 0.4)));
-    p.broom.rotation.z = Math.sin(T * 4.2) * 0.55;
-    p.broom.position.x = Math.sin(T * 1.1) * 0.5;
+    if (!p.pail) return;
+    if (!held && p.broom) {
+      p.broom.scale.setScalar(pop(seg(t, 0, 0.4)));
+      p.broom.rotation.z = Math.sin(T * 4.2) * 0.55;
+      p.broom.position.x = Math.sin(T * 1.1) * 0.5;
+    }
     p.pail.scale.setScalar(pop(seg(t, 0.2, 0.6)));
     p.water.rotation.z = Math.sin(T * 3) * 0.12;
     p.stains.children.forEach((stain, i) => stain.scale.setScalar(Math.max(0.001, 1 - seg(t, 1 + i * 0.6, 1.5 + i * 0.6))));
@@ -709,14 +732,11 @@ function Sweep() {
   ];
   return (
     <group position={[0, 0, 1.9]}>
-      <group ref={at("broom")} position={[0, 1.5, 0.25]}>
-        <P g={cyl(0.03, 0.03, 1.25, 6)} c="#b9814a" position={[0, -0.6, 0]} />
-        <P g={box(0.5, 0.1, 0.14)} c="#8a5a30" position={[0, -1.22, 0]} />
-        <P g={box(0.46, 0.24, 0.12)} c="#e8c25a" position={[0, -1.38, 0]} />
-        {[-0.14, 0, 0.14].map((x) => (
-          <L key={x} g={box(0.014, 0.22, 0.125)} c="#a8822c" position={[x, -1.38, 0]} />
-        ))}
-      </group>
+      {!held && (
+        <group ref={at("broom")} position={[0, 1.5, 0.25]}>
+          <Broom />
+        </group>
+      )}
       <group ref={at("pail")} position={[-1.3, 0, 0.2]}>
         <P g={cyl(0.24, 0.18, 0.36, 12, true)} c="#7fa3c7" position={[0, 0.18, 0]} />
         <P g={cyl(0.18, 0.18, 0.03, 12)} c="#5f84a8" position={[0, 0.015, 0]} />
@@ -1452,7 +1472,7 @@ export function Shield() {
   );
 }
 
-const EFFECTS: Record<string, (h: number) => ReactNode> = {
+const EFFECTS: Record<string, (h: number, held: boolean) => ReactNode> = {
   doctor: (h) => <Heal h={h} />,
   blocker: () => <Barricade />,
   lookout: () => <Watch />,
@@ -1462,7 +1482,7 @@ const EFFECTS: Record<string, (h: number) => ReactNode> = {
   snitch: () => <Exclaim />,
   provoker: () => <Shout />,
   tracker: () => <Footprints />,
-  cleaner: () => <Sweep />,
+  cleaner: (_, held) => <Sweep held={held} />,
   blamer: (h) => <Paint h={h} />,
   kill: () => <Slash />,
   serialKiller: () => <Slash heavy />,
@@ -1475,7 +1495,7 @@ const EFFECTS: Record<string, (h: number) => ReactNode> = {
 
 // kind: 역할 id, 또는 "kill"(임포스터의 살해), "detonate"(폭파 직전), "snap"(덫이 닫힘). h는 집 지붕 높이.
 // door는 그 집 문의 앞뒤 위치. 효과들은 기본 집의 문(1.09)에 맞춰 놓여 있어서, 문이 더 나오거나 들어간 집에서는 그만큼 민다.
-export function AbilityEffect({ kind, h = 2.8, door = 1.09 }: { kind: string; h?: number; door?: number }) {
-  const made = EFFECTS[kind]?.(h);
+export function AbilityEffect({ kind, h = 2.8, door = 1.09, held = false }: { kind: string; h?: number; door?: number; held?: boolean }) {
+  const made = EFFECTS[kind]?.(h, held);
   return made ? <group position-z={door - 1.09}>{made}</group> : null;
 }
