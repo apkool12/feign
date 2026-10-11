@@ -224,7 +224,12 @@ function ActVillageDemo({ demo }: { demo: string }) {
     demoSeat("demo-3", "blob", "house-8", "wizard", 3),
   ];
   if (action) seats[1].effect = action;
-  const replay: Flash = [{ kind: "doctor", who: "demo-target", saved: true }];
+  const replay: Flash =
+    demo === "recall-slain"
+      ? [{ kind: "slain" }]
+      : demo === "recall-rescued"
+        ? [{ kind: "rescued" }]
+        : [{ kind: "doctor", who: "demo-target", saved: true }];
   const call: Call = { events: [{ kind: "death", who: "demo-target", reveal: "의사(시민)", blast: true, bolt: false }], mine: [] };
   return (
     <main className="fixed inset-0" style={{ background: "var(--sky)" }}>
@@ -245,7 +250,7 @@ function ActVillageDemo({ demo }: { demo: string }) {
           onPick={() => {}}
           onMove={() => {}}
         />
-      ) : demo === "recall-doctor-saved" ? (
+      ) : demo.startsWith("recall-") ? (
         <Village
           key={n}
           seats={seats}
@@ -405,7 +410,7 @@ export default function Page() {
 
   if (demo === null) return <main className="flex flex-1 flex-col" />;
   if (demo.startsWith("cutin")) return <CutInDemo still={demo === "cutin-still"} />;
-  if (demo === "act-doctor" || demo === "recall-doctor-saved" || demo === "dawn-blast" || demo === "act-cleaner") return <ActVillageDemo demo={demo} />;
+  if (demo === "act-doctor" || demo === "recall-doctor-saved" || demo === "recall-slain" || demo === "recall-rescued" || demo === "dawn-blast" || demo === "act-cleaner") return <ActVillageDemo demo={demo} />;
   return (
     <main className="flex flex-1 flex-col">
       <div className="pointer-events-none fixed inset-x-0 top-24 z-30 flex flex-col items-center gap-2 px-3">
