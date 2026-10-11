@@ -624,4 +624,57 @@ for (let n = 4; n <= 10; n++) {
   }
 }
 
+
+// 아침 공개 목록: 모두에게 같은 내용, 원작이 공개하는 것만
+{
+  // 밀고자는 아침에 대상을 지목한다(모두가 본다). 알아낸 역할은 밀고자만 안다.
+  const r = room("imp:cleaner", "snitch", "doctor", "lookout", "mad:snitch");
+  night(r, { 0: "kill p3", 1: "ability p0", 4: "ability p2" });
+  const dawns = r.players.map((p) => JSON.stringify(view(r, p).dawn));
+  assert.ok(dawns.every((d) => d === dawns[0])); // 좌석마다 같은 내용
+  const dawn = view(r, r.players[2]).dawn;
+  assert.deepEqual(dawn[0], { kind: "death", who: "p3", reveal: "감시자(시민)", blast: false }); // 죽음이 먼저
+  // 같은 순서의 역할끼리는 무작위라 지목 순서는 정해져 있지 않다. 가짜 밀고자도 똑같이 지목한다.
+  assert.deepEqual(new Set(dawn.slice(1).map((d) => JSON.stringify(d))), new Set(['{"kind":"snitch","by":"p1","who":"p0"}', '{"kind":"snitch","by":"p4","who":"p2"}']));
+  assert.ok(!dawns[0].includes("cleaner") && !dawns[0].includes("청소부")); // 알아낸 역할은 새지 않는다
+  assert.ok(r.log.some((l) => l.includes("P1 님이 P0 님을 지목했습니다")));
+  advance(r, seq()); // 낮 → 밤
+  assert.deepEqual(view(r, r.players[1]).dawn, []);
+}
+{
+  // 지목 대상이 그 밤에 죽으면 지목하지 않는다. 죽은 밀고자도 지목하지 않는다.
+  const r = room("imp:cleaner", "snitch", "doctor", "lookout", "imp:blamer", "snitch");
+  night(r, { 0: "kill p3", 1: "ability p3", 4: "kill p5", 5: "ability p0" });
+  assert.deepEqual(r.dawn.filter((d) => d.kind === "snitch"), []);
+}
+{
+  // 폭탄으로 죽으면 집이 터진 것이 모두에게 보이고, 가장 먼저 나온다
+  const r = room("bomber", "imp:cleaner", "doctor", "lookout", "tracker");
+  night(r, { 0: "ability p3" });
+  advance(r, seq());
+  night(r, { 0: "detonate", 1: "kill p4" });
+  assert.deepEqual(r.dawn, [
+    { kind: "death", who: "p3", reveal: "감시자(시민)", blast: true },
+    { kind: "death", who: "p4", reveal: "추적자(시민)", blast: false },
+  ]);
+}
+{
+  // 도둑에게 죽은 사람의 역할은 가려진다
+  const r = room("thief", "imp:cleaner", "doctor", "lookout", "tracker");
+  night(r, { 0: "ability p3" });
+  assert.equal(r.players[3].reveal, "알 수 없음");
+}
+{
+  // 양초는 가장 먼저 놓여서 경찰관에게 막히지 않는다
+  const r = room("haunter", "blocker", "imp:cleaner", "doctor", "lookout");
+  night(r, { 0: "ability p4", 1: "ability p0" });
+  assert.equal(r.players[0].mark, "p4");
+}
+{
+  // 정신병자를 밀고하면 그가 믿는 역할로 보인다
+  const r = room("imp:cleaner", "snitch", "mad:doctor", "lookout", "tracker");
+  night(r, { 1: "ability p2" });
+  assert.match(r.players[1].notes.join(), /P2 님의 역할은 의사\(시민\)입니다/);
+}
+
 console.log("ok");

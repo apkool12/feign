@@ -162,6 +162,13 @@ export type Scene =
   // 당한 쪽: 경찰관에게 막힘, 덫에 걸림, 습격으로 행동 못 함, 의사가 다녀감, 선동당함
   | { kind: "blocked" | "trapped" | "raided" | "healed" | "provoked" };
 
+// 방금 지난 밤의 일 가운데 아침에 모두가 보게 되는 것. 모든 사람에게 같은 내용이 간다.
+// 원작에서 공개되는 것만 담는다: 누가 죽었고 어떤 역할로 드러났는지, 폭탄으로 죽었는지(집이 터진다),
+// 밀고자가 광장에 나와 누구를 지목했는지(알아낸 역할은 밀고자만 본다). 그 밖의 살해 수단은 담지 않는다.
+export type Dawn =
+  | { kind: "death"; who: string; reveal: string; blast: boolean } // reveal은 players[].label과 같은 글
+  | { kind: "snitch"; by: string; who: string };
+
 export type HitKind = "curse" | "sk" | "bomb" | "kill" | "thief" | "haunt";
 export type Stop = "sk" | "blocker" | "trap"; // 행동이 무효가 된 까닭
 // 복기용 기록. 게임이 끝난 뒤에만 view로 내려간다.
@@ -237,6 +244,7 @@ export interface Room {
   winner: Winner | null;
   result: string; // 승패 문구
   why: string; // 왜 끝났는지 한 줄
+  dawn: Dawn[]; // 방금 지난 밤의 공개 사건 (다음 밤이 되면 비운다)
   quiet: number; // 아무도 죽거나 추방되지 않은 밤낮이 연속 몇 번인가
   history: HistoryEntry[];
   deadline: number | null; // 현재 페이즈가 자동으로 넘어가는 시각 (서버가 관리)
@@ -257,6 +265,7 @@ export function newRoom(code: string): Room {
     winner: null,
     result: "",
     why: "",
+    dawn: [],
     quiet: 0,
     history: [],
     deadline: null,
@@ -554,7 +563,8 @@ function die(p: Player, hidden = false) {
 }
 
 // 밤 정산. 원작의 발동 순서를 따른다:
-// 마법사 → 연쇄 살인범 → 경찰관 → 트래퍼 → 폭파범 → 임포스터 → 도둑 → 의사 → 생존자·선동꾼 → 수사관·밀고자 → 감시자·추적자
+// 무속인 → 마법사 → 연쇄 살인범 → 경찰관 → 트래퍼 → 폭파범 → 임포스터(살해·청소부·남탓쟁이) → 도둑 → 의사 → 생존자·선동꾼 → 수사관·밀고자 → 감시자·추적자
+// (추적자는 원작 순서표에 없어 감시자와 같은 자리에 둔다)
 function resolveNight(room: Room, rng: Rng) {
   const night = `${room.day}일차 밤`;
   const all = room.players;
@@ -595,6 +605,8 @@ function resolveNight(room: Room, rng: Rng) {
     const t = byId(p.mark);
     if (t?.alive) hits.push({ victim: t, kind: "haunt", by: p });
   }
+  // 양초는 가장 먼저 놓인다. 습격·경찰관·덫보다 앞이라 막히지 않는다.
+  for (const p of users("haunter")) if (!p.insane) p.mark = target(p).id;
 
   for (const p of users("sorcerer")) {
     hits.push({ victim: p.act!.guess === target(p).role ? target(p) : p, kind: "curse", by: p });
@@ -641,8 +653,6 @@ function resolveNight(room: Room, rng: Rng) {
 
   // 여기서부터는 막힌 사람과 정신병자의 능력이 발동하지 않는다
   const works = (p: Player) => !stopped.has(p) && !p.insane;
-
-  for (const p of users("haunter")) if (works(p)) p.mark = target(p).id;
 
   for (const p of alive) {
     if (p.role !== "bomber" || !works(p)) continue;
@@ -738,6 +748,7 @@ function resolveNight(room: Room, rng: Rng) {
     note(p, `${t.name} 님은 ${name(options[0])} 또는 ${name(options[1])}입니다.`, { kind: "investigator", who: t.id, options });
   }
 
+  const pointed: [Player, Player][] = [];
   for (const p of users("snitch")) {
     if (stopped.has(p)) continue;
     const t = target(p);
@@ -746,8 +757,11 @@ function resolveNight(room: Room, rng: Rng) {
       continue;
     }
     p.uses!--;
-    const found = p.insane || t.insane ? fake() : real(t);
+    // 정신병자를 조사하면 그가 믿는 역할로 보인다 (수사관과 같다)
+    const found = p.insane ? fake() : real(t);
     note(p, `${t.name} 님의 역할은 ${name(found)}입니다.`, { kind: "snitch", who: t.id, ...found });
+    // 아침에 광장으로 나와 대상을 지목한다. 가짜 밀고자도 똑같이 지목한다.
+    if (!dying.has(p)) pointed.push([p, t]);
   }
 
   for (const p of users("lookout")) {
@@ -783,15 +797,22 @@ function resolveNight(room: Room, rng: Rng) {
 
   for (const p of all) p.last = p.alive ? aimId(p) : null;
 
-  // 연쇄 살인범에게 죽은 사람의 역할은 가려진다
-  const hidden = new Set(hits.filter((h) => h.kind === "sk").map((h) => h.victim));
-  for (const p of all) {
-    if (!dying.has(p)) continue;
+  // 연쇄 살인범과 도둑에게 죽은 사람의 역할은 가려진다
+  const hidden = new Set(hits.filter((h) => h.kind === "sk" || h.kind === "thief").map((h) => h.victim));
+  // 폭탄은 밤이 끝나기 직전에 집이 터지므로 먼저, 나머지는 발동 순서대로 (아침에 집에서 나오다 쓰러진다)
+  const blasted = new Set(hits.filter((h) => h.kind === "bomb").map((h) => h.victim));
+  const dead = [...new Set(hits.map((h) => h.victim))].filter((p) => dying.has(p));
+  for (const p of [...dead.filter((p) => blasted.has(p)), ...dead.filter((p) => !blasted.has(p))]) {
     die(p, hidden.has(p));
     p.will = true;
     announce(room, `${night}: ${p.name} 님이 사망했습니다. (${p.reveal})`);
+    room.dawn.push({ kind: "death", who: p.id, reveal: p.reveal!, blast: blasted.has(p) });
   }
   if (!dying.size) announce(room, `${night}: 아무도 죽지 않았습니다.`);
+  for (const [p, t] of pointed) {
+    announce(room, `${night}: ${p.name} 님이 ${t.name} 님을 지목했습니다.`);
+    room.dawn.push({ kind: "snitch", by: p.id, who: t.id });
+  }
 
   room.history.push({
     kind: "night",
@@ -939,6 +960,7 @@ export function advance(room: Room, rng: Rng = Math.random) {
       p.will = false; // 유언은 죽은 다음 낮에만 남길 수 있다
       p.scenes = [];
     }
+    room.dawn = [];
     room.phase = "night";
     room.day++;
   }
@@ -988,6 +1010,7 @@ export function view(room: Room, me: Player, now = Date.now()) {
     why: room.why,
     history: room.phase === "ended" ? room.history : null, // 복기용. 진행 중에는 절대 내려보내지 않는다
     roster: room.roster,
+    dawn: room.dawn,
     setup: room.setup,
     remaining: room.deadline === null ? null : Math.max(0, room.deadline - now),
     pending: playing ? pending(room).length : 0,
