@@ -19,6 +19,7 @@ import { play } from "./sound";
 import { lean, type Call, type Exile, type Flash } from "./stage";
 import { collider, lift, plan, Terrain, type Circle, type Plan } from "./Terrain";
 import { EMOTE_MS, emoteClip, talk } from "./talk";
+import { useVoiceMark } from "./voice";
 import type { Mode, Role } from "../game";
 
 export type Scene = "lobby" | "night" | "day" | "ended";
@@ -512,7 +513,49 @@ function Camera({ radius, controls, demo }: { radius: number; controls: RefObjec
 }
 
 // 이름표. 글자를 2D 캔버스에 그려 텍스처로 쓴다 (한글도 시스템 글꼴로 나온다).
-function Label({ title, status = "", y, size = 1 }: { title: string; status?: string; y: number; size?: number }) {
+// 이름 왼쪽의 마이크 표시: 연결 안 됨(×), 켜짐, 음소거(빗금), 말하는 중(노란 테두리)
+function drawMic(ctx: CanvasRenderingContext2D, x: number, y: number, mark: string) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.lineCap = "round";
+  if (mark === "talk") {
+    ctx.beginPath();
+    ctx.arc(0, 0, 34, 0, Math.PI * 2);
+    ctx.fillStyle = "#ffc93c";
+    ctx.fill();
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = "#2b2118";
+    ctx.stroke();
+  }
+  const dim = mark === "off" || mark === "muted";
+  // 몸통
+  ctx.beginPath();
+  ctx.roundRect(-9, -24, 18, 30, 9);
+  ctx.fillStyle = dim ? "#b9b3a2" : "#f4ecd2";
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = "#2b2118";
+  ctx.stroke();
+  ctx.fill();
+  // 받침
+  ctx.beginPath();
+  ctx.arc(0, 0, 17, 0.15 * Math.PI, 0.85 * Math.PI);
+  ctx.moveTo(0, 17);
+  ctx.lineTo(0, 26);
+  ctx.lineWidth = 5;
+  ctx.stroke();
+  if (dim) {
+    ctx.strokeStyle = "#d9443a";
+    ctx.lineWidth = 7;
+    ctx.beginPath();
+    ctx.moveTo(-20, -24);
+    ctx.lineTo(20, 24);
+    if (mark === "off") (ctx.moveTo(20, -24), ctx.lineTo(-20, 24)); // 연결 안 됨은 ×, 음소거는 빗금 하나
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function Label({ title, status = "", y, size = 1, mark = "" }: { title: string; status?: string; y: number; size?: number; mark?: string }) {
   // HUD와 같은 글꼴을 쓴다. 글꼴이 늦게 도착하면 그때 다시 그린다.
   const [loaded, setLoaded] = useState(false);
   const family = `${getComputedStyle(document.documentElement).getPropertyValue("--font-display") || "system-ui"}, system-ui, sans-serif`;
@@ -541,11 +584,15 @@ function Label({ title, status = "", y, size = 1 }: { title: string; status?: st
     };
     write(title, 54, status ? 64 : 100); // 한 줄이면 가운데에
     write(status, 34, 124);
+    if (mark) {
+      ctx.font = `54px ${family}`;
+      drawMic(ctx, Math.max(40, 384 - Math.min(740, ctx.measureText(title).width) / 2 - 46), status ? 46 : 82, mark);
+    }
     const made = new THREE.CanvasTexture(canvas);
     made.colorSpace = THREE.SRGBColorSpace;
     return made;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [title, status, family, loaded]);
+  }, [title, status, family, loaded, mark]);
   useEffect(() => () => texture.dispose(), [texture]);
   return (
     <sprite position={[0, y, 0]} scale={[0.26 * size, 0.054 * size, 1]} renderOrder={10}>
@@ -709,6 +756,7 @@ function Done({ y }: { y: number }) {
 }
 
 function House({ seat, color, spot, night, wait, burnt = false, heldTools = true, onPick }: { seat: Seat; color: string; spot: Spot; night: boolean; wait: number; burnt?: boolean; heldTools?: boolean; onPick: (id: string) => void }) {
+  const mark = useVoiceMark(seat.id); // 이름 옆 마이크 표시
   const [hover, setHover] = useState(false);
   // 창문 불은 주인이 들어간 뒤에 켜지고, 아침에는 나오기 전에 꺼진다
   const [home, setHome] = useState(night);
@@ -778,7 +826,7 @@ function House({ seat, color, spot, night, wait, burnt = false, heldTools = true
           <Candle />
         </group>
       )}
-      {seat.name && <Label title={`${seat.mayor ? "시장 " : ""}${seat.name}${seat.isMe ? " (나)" : ""}`} status={seat.status} y={shape.h + 0.75} />}
+      {seat.name && <Label title={`${seat.mayor ? "시장 " : ""}${seat.name}${seat.isMe ? " (나)" : ""}`} status={seat.status} y={shape.h + 0.75} mark={mark} />}
       {/* 캐릭터가 안 보이는 사람(밤의 남, 죽은 사람)의 말은 집 위에 뜬다 */}
       {!(seat.isMe || (seat.alive && (!night || seat.ally))) && <Bubble id={seat.id} y={shape.h + 1.15} />}
     </group>
@@ -789,6 +837,7 @@ const TINT = new THREE.Color();
 
 // 캐릭터의 생김새. ghost면 죽은 뒤의 내 모습(나에게만 보인다)인 유령을 그린다.
 export function Body({ seat, color, clip, ghost = false, held }: { seat: Seat; color: string; clip: RefObject<string>; ghost?: boolean; held?: ReactNode }) {
+  const mark = useVoiceMark(seat.id); // 이름 옆 마이크 표시
   if (ghost)
     return (
       <>
@@ -803,7 +852,7 @@ export function Body({ seat, color, clip, ghost = false, held }: { seat: Seat; c
             }}
           />
         </Suspense>
-        {seat.name && <Label title={seat.name} y={1.45} size={0.75} />}
+        {seat.name && <Label title={seat.name} y={1.45} size={0.75} mark={mark} />}
         <Bubble id={seat.id} y={1.8} />
       </>
     );
@@ -843,7 +892,7 @@ export function Body({ seat, color, clip, ghost = false, held }: { seat: Seat; c
           )}
         </group>
       </Suspense>
-      {seat.name && <Label title={seat.name} y={1.45} size={0.75} />}
+      {seat.name && <Label title={seat.name} y={1.45} size={0.75} mark={mark} />}
       <Bubble id={seat.id} y={1.8} />
     </>
   );
