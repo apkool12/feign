@@ -380,6 +380,7 @@ export function useGameSound(view: View, due: number | null) {
       // 밤사이 죽었으면 낮 종소리 뒤에, 낮에 추방됐으면 밤 종소리 앞에
       if (alive(view) < alive(was) && phase !== "ended") was.phase === "day" ? play("exile") : later("death", 900);
     }
+    if (view.turn?.mine && !was.turn?.mine) play("confirm"); // 밤: 내 차례가 왔다
     if (me.role && !was.me.role) later("reveal", 300);
     if (players.some((p) => p.mayor) && !was.players.some((p) => p.mayor)) play("mayor");
     if (phase === "lobby" && was.phase === "lobby" && players.length !== was.players.length)
@@ -408,14 +409,17 @@ export function useGameSound(view: View, due: number | null) {
 
   // 마지막 10초는 째깍거린다
   const timed = view.phase === "night" || view.phase === "day";
+  const mine = !!view.turn?.mine;
   useEffect(() => {
     if (!due || !timed) return;
+    // 밤은 차례가 15초씩이라 내 차례의 마지막 5초만 째깍거린다
+    const span = view.phase === "night" ? (mine ? 5 : 0) : 10;
     let last = 99;
     const timer = setInterval(() => {
       const left = Math.ceil((due - Date.now()) / 1000);
-      if (left !== last && left > 0 && left <= 10) play("tick", 1, left <= 3 ? 1.2 : 1);
+      if (left !== last && left > 0 && left <= span) play("tick", 1, left <= 3 ? 1.2 : 1);
       last = left;
     }, 200);
     return () => clearInterval(timer);
-  }, [due, timed]);
+  }, [due, timed, mine, view.phase]);
 }

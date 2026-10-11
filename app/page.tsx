@@ -12,7 +12,7 @@ import type { Period, Step } from "./timeline";
 import { ambience } from "./sound";
 import { flashOf, stage, type Call, type Exile, type Flash } from "./stage";
 import type { Positions, Seat } from "./Village";
-import { DAY_CHOICES, HATS, HOUSES, INSANE, MAX_PLAYERS, MIN_PLAYERS, NIGHT_CHOICES, POOL, ROLES, SKINS, SKIP, TEAM_NAME } from "../game";
+import { DAY_CHOICES, HATS, HOUSES, INSANE, MAX_PLAYERS, MIN_PLAYERS, POOL, ROLES, SKINS, SKIP, TEAM_NAME } from "../game";
 import type { Hat, HistoryEntry, House, Mode, Role, Skin, Slot, Team, View } from "../game";
 
 const SKIN_NAME: Record<Skin, string> = { blob: "기본", chiikawa: "치이카와", hachiware: "하치와레", usagi: "우사기" };
@@ -672,11 +672,17 @@ function Game({ view, due, positions, send, leave }: GameProps) {
       ? ""
       : me.uses === 0
         ? "능력을 다 썼다"
-        : me.role === "blocker"
-          ? "어제 썼으니 오늘은 쉰다"
-          : "";
+        : "";
   const hint =
-    playing && !me.alive ? (me.will ? "죽었다 · 낮에 유언 한마디" : "죽었다") : me.both ? "혼자 남았다 · 살해와 능력 둘 다" : idle;
+    playing && !me.alive
+      ? me.will
+        ? "죽었다 · 낮에 유언 한마디"
+        : "죽었다"
+      : view.turn && !view.turn.mine
+        ? `${view.turn.names.join("·")} 차례` // 밤은 역할마다 차례대로 고른다
+        : me.both
+          ? "혼자 남았다 · 살해와 능력 둘 다"
+          : idle;
 
   // 밤에 집을 골랐을 때. 혼자 남은 임포스터는 살해 대상과 능력 대상을 따로 고른다.
   const visit = (id: string) => {
@@ -691,7 +697,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
   const seats = players.map((p) => {
     const isMe = p.id === me.id;
     const usable = night
-      ? !!mode && !isMe && !(mode === "kill" && p.ally) && !(mode === "ability" && me.blocked === p.id)
+      ? !!mode && (!isMe || (mode === "ability" && me.role === "doctor")) && !(mode === "kill" && p.ally) && !(mode === "ability" && me.blocked === p.id)
       : phase === "day";
     const killing = night && me.act?.mode === "kill" && me.act.target === p.id;
     const aiming = night && (me.act?.mode === "ability" ? me.act.target : me.act?.extra) === p.id;
@@ -703,7 +709,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
       !p.connected && "끊김",
       p.doing,
       p.provoked && "+2표",
-      night && me.blocked === p.id && "어제 치료",
+      night && me.blocked === p.id && (me.role === "doctor" ? "어제 치료" : "어제 막음"),
     ]
       .filter(Boolean)
       .join(" · ");
@@ -1543,16 +1549,15 @@ function SetupBoard({ view, isHost, send }: { view: View; isHost: boolean; send:
         </>
       ) : (
         <div className="flex flex-col gap-5">
-          {(["night", "day"] as const).map((key) => (
-            <div key={key} className="flex flex-wrap items-center gap-3" role="group" aria-label={key === "night" ? "밤 시간" : "낮 시간"}>
-              <span className={key === "night" ? "moon" : "sun"} aria-hidden />
-              {(key === "night" ? NIGHT_CHOICES : DAY_CHOICES).map((sec) => (
-                <button key={sec} className="btn" disabled={!isHost} aria-pressed={setup[key] === sec} onClick={() => change({ [key]: sec })}>
-                  {sec}초
-                </button>
-              ))}
-            </div>
-          ))}
+          {/* 밤은 역할마다 15초씩 차례로 돌아서 길이를 고르지 않는다 */}
+          <div className="flex flex-wrap items-center gap-3" role="group" aria-label="낮 시간">
+            <span className="sun" aria-hidden />
+            {DAY_CHOICES.map((sec) => (
+              <button key={sec} className="btn" disabled={!isHost} aria-pressed={setup.day === sec} onClick={() => change({ day: sec })}>
+                {sec}초
+              </button>
+            ))}
+          </div>
           <button className="btn self-start" disabled={!isHost} aria-pressed={setup.calm} onClick={() => change({ calm: !setup.calm })}>
             첫 밤은 아무도 안 죽기
           </button>
