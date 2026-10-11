@@ -31,7 +31,7 @@ type Fx = { t0: number; t1: number; at: V; rot: number; kind: string; h?: number
 type Icon = { t0: number; t1: number; at: V; role: string }; // 떠오르는 역할 패
 type Cue = { t: number; name: Sfx };
 // 장면 하나. 시간은 장면이 시작된 때부터 잰다 (처음 LEAD초는 카메라가 자리를 잡는다).
-type Act = { len: number; cast: Part[]; fx?: Fx[]; icons?: Icon[]; cues?: Cue[]; pos: V; look: V; follow?: number };
+type Act = { len: number; cast: Part[]; fx?: Fx[]; icons?: Icon[]; cues?: Cue[]; shakes?: number[]; pos: V; look: V; follow?: number };
 type Shot = { t0: number; pos: V; look: V; follow: number; base: V | null };
 // sum부터는 건너뛰기로 넘어갈 수 있는 끝부분이고, 배우들은 sum + hold까지 보인다. beats는 화면 아래 글이 바뀌는 때, marks는 죽음이 드러나는 때.
 type Script = { cast: Part[]; fx: Fx[]; icons: Icon[]; cues: Cue[]; shots: Shot[]; beats: number[]; marks: { t: number; id: string }[]; shakes?: number[]; sum: number; hold: number; total: number };
@@ -87,6 +87,58 @@ function write(flash: Flash, seats: Seat[], spots: Spot[], sizes: number[], heig
     return t1;
   };
   const flee = (i: number, t: number, sign = -1): Seg => ({ t0: t, t1: t + 0.7, a: step(i), b: far(i, sign, 4), clip: "walk", round: true, s1: 0.4 });
+  const cprPatient = (body: V, face: V, start: number, revive: number, cheer: number, end: number): Seg[] => {
+    const segs: Seg[] = [];
+    for (const press of [0.2, 0.6, 1, 1.4]) {
+      const up = start + press;
+      const down = Math.min(up + 0.12, revive);
+      const settle = Math.min(up + 0.4, revive);
+      segs.push({ t0: up, t1: down, a: body, b: body, clip: "die", face, up: [0, 0.09] });
+      if (settle > down) segs.push({ t0: down, t1: settle, a: body, b: body, clip: "die", face, up: [0.09, 0] });
+    }
+    segs.push({ t0: revive, t1: cheer, a: body, b: body, clip: "revive", face }, { t0: cheer, t1: end, a: body, b: body, clip: "cheer", face });
+    return segs;
+  };
+  const cprHelper = (at: V, face: V, start: number, revive: number, cheer: number, end: number, exit?: V): Seg[] => [
+    { t0: start, t1: revive, a: at, b: at, clip: actClip("doctorSaved"), face },
+    ...(exit
+      ? [
+          { t0: revive, t1: cheer, a: at, b: at, clip: "idle", face },
+          { t0: cheer, t1: end, a: at, b: exit, clip: "walk", round: true, s1: 0.35 },
+        ]
+      : [
+          { t0: revive, t1: cheer, a: at, b: at, clip: "medic", face },
+          { t0: cheer, t1: end, a: at, b: at, clip: "cheer", face },
+        ]),
+  ];
+  const doctorFx = (i: number, revive: number, end: number) => fx(i, "doctor", revive - 1.3, end);
+  const ambush = (i: number) => {
+    const door = sill(i);
+    const attack = step(i);
+    const body = attack.clone().addScaledVector(side(i), 0.38);
+    const mid = attack.clone().lerp(body, 0.55);
+    return {
+      body,
+      victim: [
+        { t0: 1.3, t1: 1.6, a: door, b: door, clip: "idle", s0: 0, face: attack },
+        { t0: 1.6, t1: 2, a: door, b: door, clip: "startle", face: attack },
+        { t0: 2, t1: 2.3, a: door, b: body, clip: "startle", face: attack },
+      ] satisfies Seg[],
+      attacker: [
+        { t0: LEAD, t1: 1.6, a: far(i, -1, 3), b: attack, clip: "sneak", round: true },
+        { t0: 1.6, t1: 2, a: attack, b: attack, clip: "idle", face: door },
+        { t0: 2, t1: 2.15, a: attack, b: mid, clip: "walk", face: body, up: [0, 0.72] },
+        { t0: 2.15, t1: 2.3, a: mid, b: body, clip: "walk", face: body, up: [0.72, 0] },
+        { t0: 2.3, t1: 3, a: body, b: far(i, 1, 3), clip: "walk", round: true, s1: 0.35 },
+      ] satisfies Seg[],
+      fx: [{ t0: 2, t1: 2.7, at: body, rot: spots[i].angle + Math.PI, kind: "dust" }] satisfies Fx[],
+      cues: [
+        { t: 1.3, name: "door" },
+        { t: 2, name: "thud" },
+      ] satisfies Cue[],
+      shakes: [2],
+    };
+  };
 
   function act(scene: Scene): Act | null {
     const L = LEAD;
@@ -231,29 +283,19 @@ function write(flash: Flash, seats: Seat[], spots: Spot[], sizes: number[], heig
           const post = step(w).addScaledVector(side(w), -0.85);
           const help = step(w).addScaledVector(side(w), -0.25);
           const body = step(w).addScaledVector(side(w), 0.38);
+          const T = { cpr: 2.3, revive: 3.9, cheer: 4.9, end: 5.4 };
           const hurt: Seg[] = [
             { t0: 1.5, t1: 2, a: sill(w), b: body, clip: "die", s0: 0.35, face: post },
-            { t0: 2, t1: 2.5, a: body, b: body, clip: "die", face: post },
-            { t0: 2.5, t1: 2.62, a: body, b: body, clip: "die", face: post, up: [0, 0.09] },
-            { t0: 2.62, t1: 2.9, a: body, b: body, clip: "die", face: post, up: [0.09, 0] },
-            { t0: 2.9, t1: 3.02, a: body, b: body, clip: "die", face: post, up: [0, 0.09] },
-            { t0: 3.02, t1: 3.3, a: body, b: body, clip: "die", face: post, up: [0.09, 0] },
-            { t0: 3.3, t1: 3.42, a: body, b: body, clip: "die", face: post, up: [0, 0.09] },
-            { t0: 3.42, t1: 3.7, a: body, b: body, clip: "die", face: post, up: [0.09, 0] },
-            { t0: 3.7, t1: 3.82, a: body, b: body, clip: "die", face: post, up: [0, 0.09] },
-            { t0: 3.82, t1: 3.9, a: body, b: body, clip: "die", face: post, up: [0.09, 0] },
-            { t0: 3.9, t1: 4.9, a: body, b: body, clip: "revive", face: post },
-            { t0: 4.9, t1: 5.4, a: body, b: body, clip: "cheer", face: post },
+            { t0: 2, t1: T.cpr + 0.2, a: body, b: body, clip: "die", face: post },
+            ...cprPatient(body, post, T.cpr, T.revive, T.cheer, T.end),
           ];
           return {
-            len: 5.4,
+            len: T.end,
             cast: [
               part(me, [
                 { t0: 0, t1: 2, a: post, b: post, clip: "idle", face: step(w) },
-                { t0: 2, t1: 2.3, a: post, b: help, clip: "walk", face: body },
-                { t0: 2.3, t1: 3.9, a: help, b: help, clip: actClip("doctorSaved"), face: body },
-                { t0: 3.9, t1: 4.9, a: help, b: help, clip: "medic", face: body },
-                { t0: 4.9, t1: 5.4, a: help, b: help, clip: "cheer", face: body },
+                { t0: 2, t1: T.cpr, a: post, b: help, clip: "walk", face: body },
+                ...cprHelper(help, body, T.cpr, T.revive, T.cheer, T.end),
               ]),
               shade([
                 { t0: 0.9, t1: 1.5, a: far(w, -1, 3), b: sill(w), clip: "sneak", round: true },
@@ -261,7 +303,7 @@ function write(flash: Flash, seats: Seat[], spots: Spot[], sizes: number[], heig
               ]),
               part(w, hurt),
             ],
-            fx: [fx(w, "doctor", 2.6, 5.4)],
+            fx: [doctorFx(w, T.revive, T.end)],
             cues: [
               { t: 1.4, name: "kill" },
               { t: 1.5, name: "door" },
@@ -327,6 +369,7 @@ function write(flash: Flash, seats: Seat[], spots: Spot[], sizes: number[], heig
       }
       case "raided": {
         // 누군가 내 집에 들이닥쳤다
+        if (flash.some((s) => s.kind === "rescued")) return null; // 구조 장면에서 이미 덮치는 모습을 본다
         const segs: Seg[] = [];
         const t = creep(me, L, segs, -1, 3);
         const len = t + 2;
@@ -339,6 +382,38 @@ function write(flash: Flash, seats: Seat[], spots: Spot[], sizes: number[], heig
             { t: t - 0.1, name: "door" },
             { t: t + 0.2, name: "kill" },
           ],
+          ...front(me),
+        };
+      }
+      case "slain": {
+        // 당한 사람에게는 누가, 무엇으로 공격했는지 보이지 않는다.
+        const hit = ambush(me);
+        const len = 3.4;
+        return {
+          len,
+          cast: [shade(hit.attacker), part(me, [...hit.victim, { t0: 2.3, t1: len, a: hit.body, b: hit.body, clip: "die", face: step(me) }])],
+          fx: hit.fx,
+          cues: hit.cues,
+          shakes: hit.shakes,
+          ...front(me),
+        };
+      }
+      case "rescued": {
+        // 앞부분은 쓰러지는 장면과 같고, 익명의 의사 그림자만 심폐소생술을 한다.
+        const hit = ambush(me);
+        const T = { cpr: 2.7, revive: 4.3, cheer: 5.1, end: 5.6 };
+        const help = step(me).addScaledVector(side(me), -0.25);
+        const doctorFrom = far(me, -1, 3);
+        return {
+          len: T.end,
+          cast: [
+            shade(hit.attacker),
+            shade([{ t0: 2.3, t1: T.cpr, a: doctorFrom, b: help, clip: "walk", round: true, face: hit.body }, ...cprHelper(help, hit.body, T.cpr, T.revive, T.cheer, T.end, doctorFrom)]),
+            part(me, [...hit.victim, { t0: 2.3, t1: T.cpr + 0.2, a: hit.body, b: hit.body, clip: "die", face: step(me) }, ...cprPatient(hit.body, step(me), T.cpr, T.revive, T.cheer, T.end)]),
+          ],
+          fx: [...hit.fx, doctorFx(me, T.revive, T.end)],
+          cues: [...hit.cues, { t: T.revive - 1.3, name: "doctor" }],
+          shakes: hit.shakes,
           ...front(me),
         };
       }
@@ -413,6 +488,7 @@ function write(flash: Flash, seats: Seat[], spots: Spot[], sizes: number[], heig
     script.fx.push(...(a.fx ?? []).map((f) => ({ ...f, t0: at(f.t0), t1: at(f.t1) })));
     script.icons.push(...(a.icons ?? []).map((i) => ({ ...i, t0: at(i.t0), t1: at(i.t1) })));
     script.cues.push(...(a.cues ?? []).map((c) => ({ ...c, t: off + c.t * k })));
+    if (a.shakes?.length) script.shakes = [...(script.shakes ?? []), ...a.shakes.map((t) => off + t * k)];
     off += a.len * k;
   });
   script.cues.sort((a, b) => a.t - b.t);
@@ -978,7 +1054,7 @@ export function Replay({ flash, call, exile, seats, spots, sizes, heights, doors
   );
 }
 
-const SAID: Record<string, string> = { blocked: "문 앞이 막혔다", trapped: "덫에 걸렸다", raided: "습격당했다", healed: "의사가 다녀갔다", provoked: "누가 선동했다" };
+const SAID: Record<string, string> = { blocked: "문 앞이 막혔다", trapped: "덫에 걸렸다", raided: "습격당했다", healed: "의사가 다녀갔다", provoked: "누가 선동했다", slain: "쓰러졌다", rescued: "의사가 살려 냈다" };
 
 // 화면 아래 글. 회상(flash)이면 "어젯밤" 딱지와 끝의 정리 줄들, 아침 발표(call)면 지금 보는 사건 한 줄.
 // beat는 지금까지 넘어간 글의 번호(-1이면 아직 없음).
