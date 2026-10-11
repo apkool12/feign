@@ -163,7 +163,9 @@ export type Scene =
   | { kind: "doctor"; who: string; saved: boolean }
   | { kind: "thief"; who: string; stolen: Seen | null } // 훔치지 못하면 null
   // 당한 쪽: 경찰관에게 막힘, 덫에 걸림, 습격으로 행동 못 함, 의사가 다녀감, 선동당함
-  | { kind: "blocked" | "trapped" | "raided" | "healed" | "provoked" };
+  | { kind: "blocked" | "trapped" | "raided" | "healed" | "provoked" }
+  // 당한 쪽이 보는 것. 누가, 무엇으로 했는지는 담지 않는다 (죽은 사람도 유언을 남길 수 있다)
+  | { kind: "slain" | "rescued" };
 
 // 방금 지난 밤의 일 가운데 아침에 모두가 보게 되는 것. 모든 사람에게 같은 내용이 간다.
 // 원작에서 공개되는 것만 담는다: 누가 죽었고 어떤 역할로 드러났는지, 폭탄으로 죽었는지(집이 터진다),
@@ -729,7 +731,6 @@ function resolveNight(room: Room, rng: Rng) {
   const healed = new Set<Player>();
   for (const p of users("doctor")) {
     if (stopped.has(p)) continue;
-    if (target(p) !== p) note(target(p), "의사가 다녀갔습니다.", { kind: "healed" });
     if (!p.insane) healed.add(target(p));
   }
 
@@ -742,17 +743,32 @@ function resolveNight(room: Room, rng: Rng) {
 
   // 사망 판정. 저주는 치료할 수 없고, 마법사는 저주와 양초로만 죽는다. 평화로운 첫 밤에는 아무도 죽지 않는다.
   const calm = room.setup.calm && room.day === 1;
-  const dying = new Set<Player>(
-    (calm ? [] : hits)
-      .filter(
-        (h) =>
-          !armored.has(h.victim) &&
-          !(h.kind !== "curse" && healed.has(h.victim)) &&
-          !(h.victim.role === "sorcerer" && h.kind !== "curse" && h.kind !== "haunt"),
-      )
-      .map((h) => h.victim),
-  );
+  // heal이 false면 "의사가 없었다면"을 묻는다
+  const lethal = (heal: boolean) =>
+    new Set<Player>(
+      (calm ? [] : hits)
+        .filter(
+          (h) =>
+            !armored.has(h.victim) &&
+            !(heal && h.kind !== "curse" && healed.has(h.victim)) &&
+            !(h.victim.role === "sorcerer" && h.kind !== "curse" && h.kind !== "haunt"),
+        )
+        .map((h) => h.victim),
+    );
+  const dying = lethal(true);
   const attacked = new Set(hits.map((h) => h.victim));
+
+  // 치료받은 쪽이 아는 것. 의사가 아니었으면 죽었을 사람은 공격받고 살아난 것을 안다 (진짜 의사가 살렸을 때만).
+  // 그 밖에는 누가 다녀갔다는 것만 안다. 죽은 사람에게는 알리지 않는다 (알리면 그 의사가 정신병자임이 드러난다).
+  const doomed = lethal(false);
+  const told = new Set<Player>();
+  for (const p of users("doctor")) {
+    const t = target(p);
+    if (stopped.has(p) || t === p || dying.has(t) || told.has(t)) continue;
+    told.add(t);
+    if (doomed.has(t)) note(t, "공격을 받았지만 의사가 살려 냈습니다.", { kind: "rescued" });
+    else note(t, "의사가 다녀갔습니다.", { kind: "healed" });
+  }
 
   for (const p of users("doctor")) {
     if (stopped.has(p)) continue;
@@ -848,6 +864,10 @@ function resolveNight(room: Room, rng: Rng) {
   for (const p of [...dead.filter((p) => blasted.has(p)), ...dead.filter((p) => !blasted.has(p))]) {
     die(p, hidden.has(p));
     p.will = true;
+    // 죽은 사람은 무엇에 죽었는지 알 수 없다. 습격 소식을 지우고, 수단과 상관없이 같은 장면 하나만 본다 (폭탄과 번개는 발표로 본다).
+    p.scenes = p.scenes.filter((s) => s.kind !== "raided");
+    p.notes = p.notes.filter((n) => !(n.startsWith(night) && n.includes("습격을 받아")));
+    if (!blasted.has(p) && !struck.has(p)) p.scenes.push({ kind: "slain" });
     announce(room, `${night}: ${p.name} 님이 사망했습니다. (${p.reveal})`);
     room.dawn.push({ kind: "death", who: p.id, reveal: p.reveal!, blast: blasted.has(p), bolt: !blasted.has(p) && struck.has(p) });
   }

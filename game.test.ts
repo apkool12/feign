@@ -137,7 +137,7 @@ for (let n = 4; n <= 10; n++) {
   night(r, { 1: "ability p2", 3: "ability p0" });
   assert.equal(seen.alive, true);
   assert.match(notes(doc), /P2 님을 공격에서 지켜냈습니다/);
-  assert.match(notes(seen), /의사가 다녀갔습니다/);
+  assert.match(notes(seen), /공격을 받았지만 의사가 살려 냈습니다/);
   assert.match(notes(tracker), /P0 님은 P2 님 집에 갔습니다/);
   assert.deepEqual(view(r, doc).news, ["1일차 밤: 아무도 죽지 않았습니다.", doc.notes[0]]);
   r.phase = "night";
@@ -437,7 +437,58 @@ for (let n = 4; n <= 10; n++) {
   const r = room("imp:cleaner", "doctor", "lookout", "tracker", "snitch");
   night(r, { 0: "kill p2", 1: "ability p2" });
   assert.deepEqual(view(r, r.players[1]).me.scenes, [{ kind: "doctor", who: "p2", saved: true }]);
-  assert.deepEqual(view(r, r.players[2]).me.scenes, [{ kind: "healed" }]);
+  assert.deepEqual(view(r, r.players[2]).me.scenes, [{ kind: "rescued" }]); // 공격받고 살아난 사람은 그것을 안다
+}
+
+// 당한 쪽이 보는 장면: 죽은 사람은 수단과 상관없이 똑같은 것 하나만, 살아난 사람은 진짜 의사가 살렸을 때만
+{
+  const seenBy = (r: Room, i: number) => view(r, r.players[i]).me.scenes;
+  const slain = [{ kind: "slain" }];
+  // 임포스터의 칼
+  let r = room("imp:cleaner", "doctor", "lookout", "tracker", "snitch");
+  night(r, { 0: "kill p2" });
+  assert.deepEqual(seenBy(r, 2), slain);
+  // 연쇄 살인범: 습격 장면과 소식이 남지 않는다
+  r = room("serialKiller", "doctor", "lookout", "tracker", "imp:cleaner");
+  night(r, { 0: "ability p2" });
+  assert.deepEqual(seenBy(r, 2), slain);
+  assert.ok(!notes(r.players[2]).includes("습격"));
+  // 도둑
+  r = room("thief", "imp:cleaner", "doctor", "lookout", "tracker");
+  night(r, { 0: "ability p3" });
+  assert.deepEqual(seenBy(r, 3), slain);
+  // 정신병자 의사가 다녀간 사람이 죽으면 의사가 왔다는 것을 모른다 (알면 그 의사가 가짜임이 드러난다)
+  r = room("imp:cleaner", "mad:doctor", "lookout", "tracker", "snitch");
+  night(r, { 0: "kill p2", 1: "ability p2" });
+  assert.deepEqual(seenBy(r, 2), slain);
+  assert.ok(!notes(r.players[2]).includes("의사"));
+  // 폭탄과 번개는 모두가 발표로 본다. 개인 장면이 없다.
+  r = room("bomber", "imp:cleaner", "doctor", "lookout", "tracker");
+  night(r, { 0: "ability p3" });
+  advance(r, seq());
+  night(r, { 0: "detonate" });
+  assert.deepEqual(seenBy(r, 3), []);
+  r = room("sorcerer", "imp:cleaner", "doctor", "lookout");
+  night(r, { 0: "ability p3 lookout" });
+  assert.equal(r.players[3].alive, false);
+  assert.deepEqual(seenBy(r, 3), []);
+  // 공격이 없었으면 의사가 다녀간 것만 안다. 정신병자 의사도 똑같이 보인다.
+  r = room("imp:cleaner", "doctor", "lookout", "tracker", "snitch");
+  night(r, { 1: "ability p2" });
+  assert.deepEqual(seenBy(r, 2), [{ kind: "healed" }]);
+  r = room("imp:cleaner", "mad:doctor", "lookout", "tracker", "snitch");
+  night(r, { 1: "ability p2" });
+  assert.deepEqual(seenBy(r, 2), [{ kind: "healed" }]);
+  // 갑옷으로 산 사람은 구조된 것이 아니다
+  r = room("survivor", "imp:cleaner", "doctor", "lookout", "tracker");
+  night(r, { 0: "armor", 1: "kill p0", 2: "ability p0" });
+  assert.equal(r.players[0].alive, true);
+  assert.deepEqual(seenBy(r, 0), [{ kind: "healed" }]);
+  // 평화로운 첫 밤에는 구조도 없다
+  r = room("imp:cleaner", "doctor", "lookout", "tracker", "snitch");
+  r.setup.calm = true;
+  night(r, { 0: "kill p2", 1: "ability p2" });
+  assert.deepEqual(seenBy(r, 2), [{ kind: "healed" }]);
 }
 
 // 정신병자는 글자 결과와 똑같은 가짜 장면을 받는다
@@ -660,7 +711,7 @@ for (let n = 4; n <= 10; n++) {
         // 복기 기록은 진행 중에 내려가지 않고, 장면은 자기 능력의 것과 당한 것만 받는다
         assert.equal(v.history, null);
         for (const s of v.me.scenes)
-          assert.ok(["blocked", "trapped", "raided", "healed", "provoked", p.role, p.stole && "thief"].includes(s.kind), `${p.role}: ${s.kind}`);
+          assert.ok(["blocked", "trapped", "raided", "healed", "provoked", "slain", "rescued", p.role, p.stole && "thief"].includes(s.kind), `${p.role}: ${s.kind}`);
         if (p.alive && p.team !== "imposter")
           assert.ok(v.players.every((q) => q.id === p.id || !q.alive || q.label === null));
         if (!p.alive) continue;
