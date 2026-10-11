@@ -10,6 +10,7 @@ import { said, typing } from "./talk";
 import { periodsOf } from "./timeline";
 import type { Period, Step } from "./timeline";
 import { ambience } from "./sound";
+import { useVoiceOn, voice } from "./voice";
 import { flashOf, stage, type Call, type Exile, type Flash } from "./stage";
 import type { Positions, Seat } from "./Village";
 import { DAY_CHOICES, HATS, HOUSES, INSANE, MAX_PLAYERS, MIN_PLAYERS, POOL, ROLES, SKINS, SKIP, TEAM_NAME } from "../game";
@@ -31,6 +32,7 @@ const HAT_NAME: Record<Hat, string> = { none: "없음", straw: "밀짚모자", w
 
 // WebGL은 브라우저에서만 돌므로 서버 렌더링에서 뺀다
 const Preview = dynamic(() => import("./Preview"), { ssr: false });
+const CutIn = dynamic(() => import("./Preview").then((m) => m.CutIn), { ssr: false });
 const Lineup = dynamic(() => import("./Preview").then((m) => m.Lineup), { ssr: false });
 const Village = dynamic(() => import("./Village"), {
   ssr: false,
@@ -91,6 +93,7 @@ const ICON = {
       <circle cx="4.5" cy="18" r="1" />
     </>,
   ),
+  mic: icon(<path d="M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM6 11a6 6 0 0 0 12 0M12 17v4" />),
   gear: icon(
     <>
       <circle cx="12" cy="12" r="3.2" />
@@ -160,7 +163,28 @@ const ROLE_MARK: Record<Slot["role"], string> = {
   haunter: "무",
 };
 
+// 연출만 따로 보기: /?demo=cutin (밀고자 지목 컷인을 되풀이한다)
+function CutInDemo() {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setN((x) => x + 1), 3600);
+    return () => clearInterval(timer);
+  }, []);
+  const looks = [
+    { skin: "blob", hat: "wizard", color: COLORS[0] },
+    { skin: "blob", hat: "straw", color: COLORS[3] },
+    { skin: "blob", hat: "none", color: COLORS[5] },
+  ];
+  return (
+    <main className="fixed inset-0" style={{ background: "var(--sky)" }}>
+      <CutIn key={n} by={looks[n % 3]} who={looks[(n + 1) % 3]} />
+    </main>
+  );
+}
+
 export default function Page() {
+  const [demo, setDemo] = useState("");
+  useEffect(() => setDemo(new URLSearchParams(location.search).get("demo") ?? ""), []);
   const [view, setView] = useState<View | null>(null);
   const [due, setDue] = useState<number | null>(null); // 페이즈가 끝나는 시각 (이 기기 시계 기준)
   const [error, setError] = useState("");
@@ -190,6 +214,7 @@ export default function Page() {
   };
 
   useEffect(() => {
+    voice.attach(send);
     saved.current = loadSaved();
     mine.current = loadPrefs();
     setPrefs(mine.current);
@@ -239,6 +264,8 @@ export default function Page() {
           setError("");
         } else if (m.t === "typing") {
           typing(m.id, m.on);
+        } else if (m.t === "rtc") {
+          void voice.handle(m.from, m.data);
         } else if (m.t === "pos") {
           positions.current.set(m.id, { x: m.x, z: m.z });
         } else {
@@ -274,6 +301,7 @@ export default function Page() {
     location.reload();
   };
 
+  if (demo === "cutin") return <CutInDemo />;
   return (
     <main className="flex flex-1 flex-col">
       <div className="pointer-events-none fixed inset-x-0 top-24 z-30 flex flex-col items-center gap-2 px-3">
@@ -567,6 +595,20 @@ function Game({ view, due, positions, send, leave }: GameProps) {
     document.title = `${title} · Feign`;
   }, [title]);
   useGameSound(view, due);
+
+  // 음성 대화의 들리는 범위는 채팅과 같다
+  const talking = useVoiceOn();
+  useEffect(() => {
+    const live = phase === "night" || phase === "day";
+    voice.rule(me.id, !live || !me.alive || phase === "day" || me.team === "imposter", (id) => {
+      const p = players.find((x) => x.id === id);
+      if (!p) return false;
+      if (!live) return true;
+      if (!p.alive) return !me.alive;
+      return phase === "day" || (p.ally && me.team === "imposter");
+    });
+  });
+  useEffect(() => () => voice.stop(), []);
 
   // 역할이 정해지는 순간 한 번 크게 보여 준다
   const hadRole = useRef(me.role !== null);
@@ -1034,6 +1076,12 @@ function Game({ view, due, positions, send, leave }: GameProps) {
         )}
 
         <div className="absolute right-4 top-3.5 flex gap-2.5">
+          {/* 음성 대화. 마이크를 켠 사람끼리 이어지고, 들리는 범위는 채팅과 같다 (밤에는 임포스터끼리, 죽으면 죽은 사람끼리) */}
+          {voice.able() && (
+            <button className="ib" aria-label="마이크" aria-pressed={talking} onClick={() => (talking ? voice.stop() : void voice.start().catch(() => {}))}>
+              {ICON.mic}
+            </button>
+          )}
           <button className="ib" aria-label="마을 사람과 기록 (Tab)" onClick={() => setOpen("info")}>
             {ICON.list}
           </button>
@@ -1298,7 +1346,7 @@ function StepRow({ step, colors }: { step: Step; colors: Colors }) {
       </li>
     );
   // 표: 받은 사람별로 모아, 던진 사람들의 머리 → 받은 사람 + 표 수
-  const to = [...new Set(step.ballots.map((b) => b.to))].sort((a, b) => (step.tally[b ?? ""] ?? -1) - (step.tally[a ?? ""] ?? -1));
+  const to = [...new Set([...step.ballots.map((b) => b.to), ...Object.keys(step.tally)])].sort((a, b) => (step.tally[b ?? ""] ?? -1) - (step.tally[a ?? ""] ?? -1));
   return (
     <>
       {to.map((t) => (
