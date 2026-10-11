@@ -11,7 +11,7 @@ const CALM = typeof window !== "undefined" && window.matchMedia("(prefers-reduce
 type Look = { skin: string; hat: string; color: string };
 
 // pose가 있으면 돌지 않고 그 동작을 한다 (결과 화면)
-function Figure({ skin, hat, color, pose, face = pose === "cheer" ? "happy" : "default" }: Look & { pose?: string; face?: string }) {
+export function Figure({ skin, hat, color, pose, face = pose === "cheer" ? "happy" : "default" }: Look & { pose?: string; face?: string }) {
   const turn = useRef<THREE.Group>(null);
   const clip = useRef(pose ?? "idle");
   useFrame((state) => {

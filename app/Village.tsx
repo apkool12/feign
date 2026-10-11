@@ -18,6 +18,7 @@ import { Replay, ReplayHud } from "./Scenes";
 import { play } from "./sound";
 import { lean, type Call, type Exile, type Flash } from "./stage";
 import { collider, lift, plan, Terrain, type Circle, type Plan } from "./Terrain";
+import { EMOTE_MS, emoteClip, talk } from "./talk";
 import type { Mode, Role } from "../game";
 
 export type Scene = "lobby" | "night" | "day" | "ended";
@@ -63,6 +64,8 @@ interface Props {
   onCallEnd?: () => void;
   burnt?: string[]; // 어젯밤 폭탄에 터진 집들 (낮 동안 그을음과 가는 연기가 남는다)
   unseen?: string[]; // 밤사이 죽었지만 아직 발표되지 않은 사람들 (집이 멀쩡해 보여야 한다)
+  freeze?: boolean; // 감정표현 휠이 열린 동안 직접 걷지 않는다
+  onMeScreen?: (x: number, y: number) => void;
   onSeen?: (id: string) => void;
   onPick: (id: string) => void;
   onMove: (x: number, z: number) => void;
@@ -266,8 +269,42 @@ function actStand(kind: string | null | undefined, spot: Spot, house: string) {
 // (지붕·몸을 플레이어 색으로, 창문을 밤에 밝게 등). paint는 매번 원래 색에서 다시 칠한다.
 // 뼈대가 있는 모델(캐릭터)은 clip이 가리키는 동작을 재생하고, 표정 하나만 보이며(동작에 짝지은 표정이 face보다 먼저다), overhead를 머리 위 기준점에 붙인다.
 type ModelProps = { file: string; paint?: Paint; clip?: RefObject<string>; face?: string; overhead?: ReactNode; held?: ReactNode; door?: RefObject<number> }; // held는 오른팔 뼈(armR)에 붙는다
-const ONCE = new Set(["vote", "startle", "turn", "die", "cast", "yawn", ...Object.values(ACT_CLIP).filter((name) => !LOOP_ACT_CLIPS.has(name))]); // 한 번 하고 마지막 자세로 멈추는 동작
-const FACE: Record<string, string> = { cheer: "happy", startle: "surprised", die: "dead", sad: "scared", yawn: "sleepy", revive: "surprised", flinch: "scared", press: "scared", paint: "happy", steal: "happy" }; // 동작과 짝인 표정
+const ONCE = new Set([
+  "vote",
+  "startle",
+  "turn",
+  "die",
+  "cast",
+  "yawn",
+  "nod",
+  "nope",
+  "plead",
+  "laugh",
+  "wave",
+  "sob_chiikawa",
+  "hum_hachiware",
+  "rampage_usagi",
+  ...Object.values(ACT_CLIP).filter((name) => !LOOP_ACT_CLIPS.has(name)),
+]); // 한 번 하고 마지막 자세로 멈추는 동작
+const FACE: Record<string, string> = {
+  cheer: "happy",
+  nod: "happy",
+  laugh: "happy",
+  wave: "happy",
+  hum_hachiware: "happy",
+  rampage_usagi: "happy",
+  startle: "surprised",
+  die: "dead",
+  sad: "scared",
+  yawn: "sleepy",
+  plead: "scared",
+  sob_chiikawa: "scared",
+  revive: "surprised",
+  flinch: "scared",
+  press: "scared",
+  paint: "happy",
+  steal: "happy",
+}; // 동작과 짝인 표정
 const STEP = 1 / 60; // 자세 갱신 간격 (클립 키 사이는 보간된다)
 const THIN = 0.025; // 집 외곽선 껍데기(두께 약 0.045)를 이만큼 안으로 당긴다
 
@@ -401,8 +438,14 @@ function pickable(seat: Seat, onPick: (id: string) => void, setHover?: (on: bool
 }
 
 // 지금 눌려 있는 키. 채팅을 치는 동안에는 받지 않는다.
-function useKeys() {
+const MOVE_KEYS = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowLeft", "ArrowDown", "ArrowRight"]);
+function useKeys(blocked = false) {
   const keys = useRef(new Set<string>());
+  const block = useRef(blocked);
+  useEffect(() => {
+    block.current = blocked;
+    if (blocked) keys.current.clear();
+  }, [blocked]);
   useEffect(() => {
     const typing = () => {
       const el = document.activeElement;
@@ -410,6 +453,11 @@ function useKeys() {
     };
     const down = (e: KeyboardEvent) => {
       if (typing()) return;
+      if (block.current && MOVE_KEYS.has(e.code)) {
+        e.preventDefault();
+        keys.current.clear();
+        return;
+      }
       if (e.code.startsWith("Arrow")) e.preventDefault();
       keys.current.add(e.code);
     };
@@ -783,8 +831,8 @@ export function Body({ seat, color, clip, ghost = false, held }: { seat: Seat; c
     <>
       {/* 캐릭터 모델이 늦게 와도 이름표는 먼저 보인다 */}
       <Suspense fallback={null}>
-        {/* 발이 길과 광장의 덧칠(땅보다 조금 높다)에 묻히지 않게 살짝 띄운다 */}
-        <group position-y={0.13}>
+        {/* 기본 캐릭터는 발바닥이 원점보다 조금 아래라 그만큼만 올린다. 먼작귀는 발바닥이 원점이라 그대로 선다. */}
+        <group position-y={seat.skin === "blob" ? 0.03 : 0}>
           {seat.skin === "blob" ? (
             blob
           ) : (
@@ -823,14 +871,18 @@ function samePoint(a: THREE.Vector3, b: THREE.Vector3) {
 }
 
 // 캐릭터가 가만히 있을 때의 동작을 고른다.
-// 끼어드는 한 번짜리 동작(투표, 놀람, 문 두드리기, 능력) > 결과의 환호·낙담 > 가끔 두리번거리기 > 대기
+// 끼어드는 한 번짜리 동작(투표, 놀람, 문 두드리기, 능력) > 감정표현 > 결과의 환호·낙담 > 가끔 두리번거리기 > 대기
 type Act = { name: string; until: number; done: boolean; shock: number; fidget: number };
 const newAct = (seat: Seat, shock: number): Act => ({ name: "", until: -1, done: seat.done, shock, fidget: -1 });
 function cut(a: Act, name: string, t: number, secs: number) {
   a.name = name;
   a.until = t + secs;
 }
-function acting(a: Act, seat: Seat, shock: number, sad: boolean, t: number, moving: boolean, night: boolean) {
+function liveEmote(seat: Seat) {
+  const e = talk.get(seat.id)?.emote;
+  return e && performance.now() - e.at < EMOTE_MS ? emoteClip(seat.skin, e.k) : null;
+}
+function acting(a: Act, seat: Seat, shock: number, sad: boolean, t: number, moving: boolean, night: boolean, emote: string | null) {
   if (seat.done && !a.done && !night) cut(a, "vote", t, 1.4); // 표를 던진 순간
   if (shock > a.shock && seat.alive && !night) cut(a, "startle", t, 1.2); // 밤사이 누가 죽었다
   a.done = seat.done;
@@ -840,12 +892,12 @@ function acting(a: Act, seat: Seat, shock: number, sad: boolean, t: number, movi
     return night ? "sneak" : "walk";
   }
   if (t < a.until) return a.name;
+  if (emote && !night) return emote;
   if (seat.won) return "cheer";
   if (sad) return "sad";
   if (a.fidget < 0) a.fidget = t + 5 + ((seat.id.charCodeAt(0) + t * 7) % 9); // 사람마다 다른 때에
   if (t > a.fidget && !CALM) {
-    const peek = Math.floor(t) % 2 === 0;
-    cut(a, peek ? "peek" : "turn", t, peek ? 2 : 1.2);
+    cut(a, "peek", t, 2); // 두리번거리기만 한다 (뒤로 도는 동작은 뺐다)
     a.fidget = -1;
     return a.name;
   }
@@ -957,7 +1009,7 @@ function Villager({ seat, color, to, start, spot, wait, visible, land, positions
     g.visible = visible;
     const live = positions.current.get(seat.id);
     const moving = walk(g, live?.x ?? to.x, live?.z ?? to.z, dt, live ? 10 : 2.5);
-    clip.current = seat.alive ? acting(act.current, seat, shock, sad, t, moving, night) : moving ? "walk" : "idle";
+    clip.current = seat.alive ? acting(act.current, seat, shock, sad, t, moving, night, moving ? null : liveEmote(seat)) : moving ? "walk" : "idle";
     g.position.y = lift(land, g.position.x, g.position.z);
   });
   return (
@@ -989,16 +1041,18 @@ type MeProps = {
   land: Plan;
   collide: (position: THREE.Vector3, solid: boolean) => void; // 건물·나무·물·다른 캐릭터에 겹치지 않게 밀어낸다
   controls: RefObject<OrbitControls | null>;
+  freeze: boolean;
+  onMeScreen?: (x: number, y: number) => void;
   onActStart: () => void;
   onMove: (x: number, z: number) => void;
 };
 
 // 내 캐릭터. WASD나 방향키로 직접 움직이고, 페이즈가 바뀌거나 집을 고르면 그리로 알아서 걸어간다.
-function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night, shock, sad, iconRole, shield, actKind, heldTools, land, collide, controls, onActStart, onMove }: MeProps) {
+function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night, shock, sad, iconRole, shield, actKind, heldTools, land, collide, controls, freeze, onMeScreen, onActStart, onMove }: MeProps) {
   const ref = useRef<THREE.Group>(null);
   const bed = useRef({ at: turn.at, from: new THREE.Vector3() });
   const puff = useRef<THREE.Group>(null);
-  const keys = useKeys();
+  const keys = useKeys(freeze);
   const manual = useRef(false);
   const lastTo = useRef(to.clone());
   const clip = useRef("idle");
@@ -1006,6 +1060,8 @@ function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night
   const knock = useRef({ cast: -1, done: new THREE.Vector3(Infinity, 0, Infinity), act: null as string | null }); // 고른 집에 도착하면 문을 두드리고, 능력이면 이어서 몸짓을 한다
   const pace = useRef(0); // 다음 발소리가 날 시각
   const sent = useRef({ x: Infinity, z: Infinity, t: 0 }); // 마지막으로 보낸 위치
+  const screen = useRef({ x: Infinity, y: Infinity, t: 0 });
+  const projected = useRef(new THREE.Vector3());
   const death = useDeath(seat.alive);
   const [gone, setGone] = useState(!seat.alive);
   const held = useRef<string | null>(null);
@@ -1040,8 +1096,9 @@ function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night
       manual.current = false; // 새 목적지가 생기면 다시 알아서 걷는다
     }
     const k = keys.current;
-    const ahead = +(k.has("KeyW") || k.has("ArrowUp")) - +(k.has("KeyS") || k.has("ArrowDown"));
-    const side = +(k.has("KeyD") || k.has("ArrowRight")) - +(k.has("KeyA") || k.has("ArrowLeft"));
+    if (freeze) k.clear();
+    const ahead = freeze ? 0 : +(k.has("KeyW") || k.has("ArrowUp")) - +(k.has("KeyS") || k.has("ArrowDown"));
+    const side = freeze ? 0 : +(k.has("KeyD") || k.has("ArrowRight")) - +(k.has("KeyA") || k.has("ArrowLeft"));
     let moving = false;
     if (bed.current.at !== turn.at) {
       bed.current.at = turn.at;
@@ -1116,7 +1173,7 @@ function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night
       arrived.cast = -1;
       if (actKind) startAct(actKind, t); // 능력을 쓴다
     }
-    const calm = show ?? acting(act.current, seat, shock, sad, t, moving, night);
+    const calm = show ?? acting(act.current, seat, shock, sad, t, moving, night, moving ? null : liveEmote(seat));
     clip.current = progress < 1 ? "die" : !seat.alive ? (moving ? "walk" : "idle") : calm; // 죽은 뒤는 유령의 동작
     if (held.current && (moving || t >= act.current.until || act.current.name !== actClip(actKind))) showHeld(null);
     if (gone !== (!seat.alive && progress >= 1)) setGone(!gone); // 쓰러지는 연출이 끝나면 유령으로 바뀐다
@@ -1135,6 +1192,18 @@ function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night
       c.target.add(shift);
       c.update();
     }
+    if (onMeScreen && t - screen.current.t > 0.08) {
+      const p = projected.current.copy(g.position);
+      p.y += 0.75;
+      p.project(state.camera);
+      const r = state.gl.domElement.getBoundingClientRect();
+      const x = r.left + (p.x * 0.5 + 0.5) * r.width;
+      const y = r.top + (-p.y * 0.5 + 0.5) * r.height;
+      if (Number.isFinite(x) && Number.isFinite(y) && Math.hypot(x - screen.current.x, y - screen.current.y) > 1) {
+        screen.current = { x, y, t };
+        onMeScreen(x, y);
+      } else screen.current.t = t;
+    }
     if (t - sent.current.t > 0.1 && Math.hypot(g.position.x - sent.current.x, g.position.z - sent.current.z) > 0.02) {
       sent.current = { x: g.position.x, z: g.position.z, t };
       onMove(g.position.x, g.position.z);
@@ -1152,7 +1221,7 @@ function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night
   );
 }
 
-export default function Village({ seats, scene, going, iconRole, shield, actKind = null, standKind = null, positions, demo = false, hud = true, heldTools = true, replay = null, onReplayEnd, call = null, onCallEnd, exile = null, onExileEnd, unseen = [], burnt = [], onSeen, onPick, onMove }: Props) {
+export default function Village({ seats, scene, going, iconRole, shield, actKind = null, standKind = null, positions, demo = false, hud = true, heldTools = true, replay = null, onReplayEnd, call = null, onCallEnd, exile = null, onExileEnd, unseen = [], burnt = [], freeze = false, onMeScreen, onSeen, onPick, onMove }: Props) {
   const n = seats.length;
   const spots = useMemo(() => layout(n), [n]);
   const [beat, setBeat] = useState(-1); // 회상·발표의 화면 아래 글이 어디까지 넘어갔나
@@ -1293,6 +1362,8 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
               land={land}
               collide={collide}
               controls={controls}
+              freeze={freeze}
+              onMeScreen={onMeScreen}
               onActStart={() => setActReady(true)}
               onMove={onMove}
             />
