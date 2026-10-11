@@ -10,7 +10,7 @@ import { emoted, isEmoteId, type EmoteId, said, typing } from "./talk";
 import { periodsOf } from "./timeline";
 import type { Period, Step } from "./timeline";
 import { ambience } from "./sound";
-import { useVoiceOn, useVoicePrefs, voice } from "./voice";
+import { useVoiceMark, useVoiceOn, useVoicePrefs, voice } from "./voice";
 import { flashOf, stage, type Call, type Exile, type Flash } from "./stage";
 import type { Positions, Seat } from "./Village";
 import { DAY_CHOICES, HATS, HOUSES, INSANE, MAX_PLAYERS, MIN_PLAYERS, POOL, ROLES, SKINS, SKIP, TEAM_NAME } from "../game";
@@ -258,6 +258,7 @@ const ICON = {
     </>,
   ),
   mic: icon(<path d="M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM6 11a6 6 0 0 0 12 0M12 17v4" />),
+  micOff: icon(<path d="M12 3a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM6 11a6 6 0 0 0 12 0M12 17v4M4 4l16 16" />),
   gear: icon(
     <>
       <circle cx="12" cy="12" r="3.2" />
@@ -915,6 +916,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
 
   // 음성 대화의 들리는 범위는 채팅과 같다
   const talking = useVoiceOn();
+  const myMark = useVoiceMark(me.id);
   useEffect(() => {
     const live = phase === "night" || phase === "day";
     voice.rule(me.id, !live || !me.alive || phase === "day" || me.team === "imposter", (id) => {
@@ -1437,8 +1439,8 @@ function Game({ view, due, positions, send, leave }: GameProps) {
         <div className="absolute right-4 top-3.5 flex gap-2.5">
           {/* 음성 대화. 마이크를 켠 사람끼리 이어지고, 들리는 범위는 채팅과 같다 (밤에는 임포스터끼리, 죽으면 죽은 사람끼리) */}
           {voice.able() && (
-            <button className="ib" aria-label="마이크" aria-pressed={talking} onClick={() => (talking ? voice.stop() : void voice.start().catch(() => {}))}>
-              {ICON.mic}
+            <button className="ib" aria-label={myMark === "muted" ? "마이크 (음소거 중, M으로 풀기)" : "마이크"} aria-pressed={talking} onClick={() => (talking ? voice.stop() : void voice.start().catch(() => {}))}>
+              {myMark === "muted" ? ICON.micOff : ICON.mic}
             </button>
           )}
           <button className="ib" aria-label="마을 사람과 기록 (Tab)" onClick={() => setOpen("info")}>
