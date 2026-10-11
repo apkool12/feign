@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
-import { Gowun_Dodum, Jua } from "next/font/google";
+import { Gothic_A1, Jua } from "next/font/google";
 import "./globals.css";
 
-// 제목·숫자·버튼은 둥글고 굵은 주아, 읽는 글은 고운돋움
+// 제목·숫자·버튼은 둥글고 굵은 주아, 읽는 글은 굵기가 있는 고딕 A1
 const display = Jua({ weight: "400", subsets: ["latin"], variable: "--font-display" });
-const body = Gowun_Dodum({ weight: "400", subsets: ["latin"], variable: "--font-body" });
+const body = Gothic_A1({ weight: ["600", "800"], subsets: ["latin"], variable: "--font-body" });
 
 export const metadata: Metadata = {
   title: "Feign",

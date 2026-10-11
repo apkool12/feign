@@ -3,14 +3,35 @@
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 import { COLORS } from "./colors";
-import type { Positions } from "./Village";
-import { DAY_CHOICES, INSANE, MAX_PLAYERS, MIN_PLAYERS, NIGHT_CHOICES, POOL, ROLES, SKIP, TEAM_NAME } from "../game";
-import type { Mode, Role, Slot, Team, View } from "../game";
+import { setFx, useFx } from "./fx";
+import { play, setVolume, useGameSound, useUiSound, volume } from "./sound";
+import { said, typing } from "./talk";
+import { periodsOf } from "./timeline";
+import type { Period, Step } from "./timeline";
+import { ambience } from "./sound";
+import type { Positions, Seat } from "./Village";
+import { DAY_CHOICES, HATS, HOUSES, INSANE, MAX_PLAYERS, MIN_PLAYERS, NIGHT_CHOICES, POOL, ROLES, SKINS, SKIP, TEAM_NAME } from "../game";
+import type { Hat, HistoryEntry, House, Mode, Role, Skin, Slot, Team, View } from "../game";
+
+const SKIN_NAME: Record<Skin, string> = { blob: "기본", chiikawa: "치이카와", hachiware: "하치와레", usagi: "우사기" };
+const HOUSE_NAME: Record<House, string> = {
+  house: "기본",
+  "house-1": "오두막",
+  "house-2": "통나무집",
+  "house-3": "초가집",
+  "house-4": "버섯집",
+  "house-5": "돌탑집",
+  "house-6": "과자집",
+  "house-7": "호박집",
+  "house-8": "풍차집",
+};
+const HAT_NAME: Record<Hat, string> = { none: "없음", straw: "밀짚모자", wizard: "마법사 모자", top: "중절모", bow: "리본" };
 
 // WebGL은 브라우저에서만 돌므로 서버 렌더링에서 뺀다
+const Preview = dynamic(() => import("./Preview"), { ssr: false });
 const Village = dynamic(() => import("./Village"), {
   ssr: false,
-  loading: () => <p className="p-4 text-sm opacity-80">마을을 불러오는 중…</p>,
+  loading: () => <p className="out p-4">마을 불러오는 중…</p>,
 });
 
 // ponytail: sessionStorage라 탭마다 다른 사람이고(한 PC에서 여러 탭으로 테스트 가능),
@@ -34,23 +55,86 @@ function store(s: Saved) {
   } catch {}
 }
 
-// 페이즈가 바뀔 때 알림음. 브라우저가 소리를 막으면 조용히 넘어간다.
-function beep() {
+// 방 밖에서도 기억하는 것: 이름, 꾸미기, 마지막 방, 목록으로 보기. 탭끼리 같이 쓴다.
+type Prefs = { name: string; skin: Skin; house: House; hat: Hat; last: string; list: boolean };
+const PREFS: Prefs = { name: "", skin: "blob", house: "house", hat: "none", last: "", list: false };
+function loadPrefs(): Prefs {
   try {
-    const ctx = new AudioContext();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.frequency.value = 660;
-    gain.gain.value = 0.1;
-    osc.connect(gain).connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.2);
-    osc.onended = () => ctx.close();
+    const p = { ...PREFS, ...JSON.parse(localStorage.getItem(KEY) ?? "{}") };
+    if (SKINS.includes(p.skin) && HOUSES.includes(p.house) && HATS.includes(p.hat)) return p;
+  } catch {}
+  return PREFS;
+}
+function savePrefs(p: Prefs) {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(p));
   } catch {}
 }
+// 초대 링크(/?room=ABCD)의 방 코드
+const invited = () => (new URLSearchParams(location.search).get("room") ?? "").toUpperCase().slice(0, 4);
 
-const btn = "hud-btn hud-btn-go"; // 판을 진행시키는 버튼
-const subBtn = "hud-btn";
+const icon = (d: React.ReactNode) => (
+  <svg viewBox="0 0 24 24" aria-hidden>
+    {d}
+  </svg>
+);
+const ICON = {
+  fx: icon(<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM18.5 15.5l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z" />),
+  list: icon(
+    <>
+      <path d="M9 6h11M9 12h11M9 18h11" />
+      <circle cx="4.5" cy="6" r="1" />
+      <circle cx="4.5" cy="12" r="1" />
+      <circle cx="4.5" cy="18" r="1" />
+    </>,
+  ),
+  gear: icon(
+    <>
+      <circle cx="12" cy="12" r="3.2" />
+      <path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" />
+    </>,
+  ),
+  close: icon(<path d="M6 6l12 12M18 6L6 18" />),
+  check: icon(<path d="M5 13l5 5 9-11" />),
+  pen: icon(<path d="M4 20l1-4L16 5l3 3L8 19Z" />),
+  grave: icon(
+    <>
+      <path d="M7 21V10a5 5 0 0 1 10 0v11Z" />
+      <path d="M4 21h16M12 9v5M10 11h4" />
+    </>,
+  ),
+  crown: icon(<path d="M4 18h16l1-10-5 4-4-7-4 7-5-4Z" />),
+  out: icon(
+    <>
+      <path d="M10 4H5v16h5" />
+      <path d="M13 8l5 4-5 4M18 12H9" />
+    </>,
+  ),
+  to: icon(<path d="M5 12h14M13 6l6 6-6 6" />),
+  skip: icon(
+    <>
+      <path d="M5 5l9 7-9 7Z" />
+      <path d="M18 5v14" />
+    </>,
+  ),
+  knife: icon(
+    <>
+      <path d="M14 3c4 2 6 6 5 11l-7-5Z" />
+      <path d="M11 10l-7 9M8 11l4 4" />
+    </>,
+  ),
+  shield: icon(<path d="M12 3l7 3v5c0 5-3 8-7 10-4-2-7-5-7-10V6Z" />),
+};
+const speaker = (v: number) =>
+  icon(
+    <>
+      <path d="M3 9.5v5h4l5 4v-13l-5 4Z" />
+      {v === 0 && <path d="M16 9.5l5 5M21 9.5l-5 5" />}
+      {v > 0 && <path d="M15.5 9.5a3.5 3.5 0 0 1 0 5" />}
+      {v > 0.34 && <path d="M18 7a7 7 0 0 1 0 10" />}
+      {v > 0.67 && <path d="M20.5 4.5a10.5 10.5 0 0 1 0 15" />}
+    </>,
+  );
 
 // 역할 패에 새기는 한 글자
 const ROLE_MARK: Record<Slot["role"], string> = {
@@ -78,9 +162,25 @@ export default function Page() {
   const [due, setDue] = useState<number | null>(null); // 페이즈가 끝나는 시각 (이 기기 시계 기준)
   const [error, setError] = useState("");
   const [online, setOnline] = useState(false);
+  useUiSound();
   const ws = useRef<WebSocket | null>(null);
   const saved = useRef<Saved>({ token: "" });
   const positions = useRef<Positions>(new Map()); // 다른 플레이어들의 위치. 매 프레임 읽으므로 state에 두지 않는다
+  const heard = useRef<{ code: string; n: number; last: unknown }>({ code: "", n: 0, last: null }); // 말풍선으로 이미 띄운 대화의 끝
+  const [prefs, setPrefs] = useState(PREFS);
+  const mine = useRef(PREFS); // 소켓 핸들러가 읽는 최신 prefs
+  const fresh = useRef(false); // 메뉴에서 방금 들어갔다 (자리 복귀가 아니다)
+  const [invite, setInvite] = useState("");
+  const update = (patch: Partial<Prefs>) => {
+    mine.current = { ...mine.current, ...patch };
+    savePrefs(mine.current);
+    setPrefs(mine.current);
+  };
+  const join = (code: string) => {
+    fresh.current = true;
+    saved.current.name = mine.current.name;
+    send({ t: "join", token: saved.current.token, name: mine.current.name, code });
+  };
 
   const send = (m: object) => {
     if (ws.current?.readyState === WebSocket.OPEN) ws.current.send(JSON.stringify(m));
@@ -88,6 +188,9 @@ export default function Page() {
 
   useEffect(() => {
     saved.current = loadSaved();
+    mine.current = loadPrefs();
+    setPrefs(mine.current);
+    setInvite(invited());
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     const open = () => {
@@ -97,25 +200,50 @@ export default function Page() {
       sock.onopen = () => {
         setOnline(true);
         if (saved.current.code) sock.send(JSON.stringify({ t: "join", ...saved.current }));
+        else if (invited() && mine.current.name) join(invited()); // 초대 링크로 왔고 이름이 있으면 메뉴를 건너뛴다
       };
       sock.onmessage = (e) => {
         const m = JSON.parse(e.data);
         if (m.t === "state") {
           const state: View = m.state;
           joined = true;
+          // 새로 온 말을 그 사람 머리 위에 띄운다. 처음 받은 대화나 한꺼번에 풀린 비밀 대화는 띄우지 않는다.
+          const h = heard.current;
+          const tail = state.chat.at(-1);
+          // ponytail: 대화가 200줄로 찬 뒤에는 길이가 그대로라 끝 줄이 바뀐 것만 본다(한 번에 한 줄)
+          const added = state.code !== h.code ? 0 : state.chat.length > h.n ? state.chat.length - h.n : tail && JSON.stringify(tail) !== h.last ? 1 : 0;
+          if (added > 0 && added <= 3)
+            for (const c of state.chat.slice(-added)) {
+              const who = c.name && state.players.find((p) => p.name === c.name);
+              if (who) said(who.id, c.text);
+            }
+          heard.current = { code: state.code, n: state.chat.length, last: tail ? JSON.stringify(tail) : null };
           saved.current.code = state.code;
           store(saved.current);
+          if (fresh.current) {
+            fresh.current = false;
+            const { skin, house, hat } = mine.current;
+            // 메뉴에서 골라 둔 꾸미기. 서버는 대기실에서만 받는다.
+            if (state.phase === "lobby") for (const m of [{ t: "skin", skin }, { t: "house", house }, { t: "hat", hat }]) sock.send(JSON.stringify(m));
+            update({ last: state.code });
+            history.replaceState(null, "", location.pathname);
+            setInvite("");
+          }
           setView(state);
           setDue(state.remaining === null ? null : Date.now() + state.remaining);
           setError("");
+        } else if (m.t === "typing") {
+          typing(m.id, m.on);
         } else if (m.t === "pos") {
           positions.current.set(m.id, { x: m.x, z: m.z });
         } else {
+          play("error");
           setError(m.msg);
           if (!joined) {
             // 입장 실패: 저장된 방을 잊고 입장 화면으로
             delete saved.current.code;
             store(saved.current);
+            fresh.current = false;
             setView(null);
           }
         }
@@ -142,49 +270,247 @@ export default function Page() {
   };
 
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 p-4">
-      <div className="pointer-events-none fixed inset-x-0 top-3 z-30 flex flex-col items-center gap-2 px-3">
-        {error && (
-          <p role="alert" className="hud-chip border-2 border-[var(--blood)]">
+    <main className="flex flex-1 flex-col">
+      <div className="pointer-events-none fixed inset-x-0 top-24 z-30 flex flex-col items-center gap-2 px-3">
+        {error && view && (
+          <p role="alert" className="toast paper" key={error} style={{ borderColor: "var(--blood)" }}>
             {error}
           </p>
         )}
-        {!online && <p className="hud-chip text-sm">서버에 연결하는 중…</p>}
+        {!online && <p className="chip">서버 연결 중…</p>}
       </div>
       {view ? (
         <Game view={view} due={due} positions={positions} send={send} leave={leave} />
       ) : (
-        <form
-          className="m-auto flex w-full max-w-xs flex-col gap-3"
-          onSubmit={(e) => {
-            e.preventDefault();
-            const fd = new FormData(e.currentTarget);
-            const name = String(fd.get("name")).trim();
-            saved.current.name = name;
-            send({ t: "join", token: saved.current.token, name, code: String(fd.get("code")) });
-          }}
-        >
-          <h1 className="hud-display text-6xl">Feign</h1>
-          <label className="flex flex-col gap-1 text-sm">
-            닉네임
-            <input name="name" required maxLength={12} className="hud-field text-base" />
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            방 코드 (비우면 새 방을 만듭니다)
-            <input
-              name="code"
-              maxLength={4}
-              autoCapitalize="characters"
-              autoComplete="off"
-              className="hud-field text-base uppercase"
-            />
-          </label>
-          <button className={btn} disabled={!online}>
-            입장
-          </button>
-        </form>
+        <Menu online={online} error={error} prefs={prefs} update={update} invite={invite} onJoin={join} />
       )}
     </main>
+  );
+}
+
+// 메뉴 배경에 서 있는 마을 사람들 (이름이 없어 이름표도 없다)
+const EXTRAS: Seat[] = (
+  [
+    ["blob", "house-1", "straw"],
+    ["chiikawa", "house-4", "none"],
+    ["blob", "house-8", "none"],
+    ["hachiware", "house-2", "none"],
+    ["usagi", "house-6", "bow"],
+    ["blob", "house-7", "wizard"],
+  ] as const
+).map(([skin, house, hat], i) => ({
+  id: `extra-${i}`,
+  name: "",
+  skin,
+  house,
+  hat,
+  done: false,
+  alive: true,
+  isMe: false,
+  ally: true, // 밤에도 보이게
+  mayor: false,
+  enabled: false,
+  mark: null,
+  effect: null,
+  status: "",
+  bombed: false,
+  marked: false,
+  won: false,
+}));
+const HOWTO = ["밤: 한 집을 골라 찾아간다", "낮: 모여서 누가 수상한지 얘기한다", "투표로 한 명을 추방한다", "우리 편이 끝까지 살아남으면 승리"];
+// 서버의 거절 문구를 메뉴에 맞게 줄인다
+const SHORT = [
+  ["없는 방", "그런 방 없어요"],
+  ["이미 시작", "벌써 시작했어요"],
+  ["이미 있는 닉네임", "그 이름은 이미 있어요"],
+  ["닉네임을", "이름부터 정해요"],
+];
+const short = (msg: string) => SHORT.find(([k]) => msg.startsWith(k))?.[1] ?? msg;
+
+type MenuProps = {
+  online: boolean;
+  error: string;
+  prefs: Prefs;
+  update: (patch: Partial<Prefs>) => void;
+  invite: string; // 초대 링크로 받은 방 코드
+  onJoin: (code: string) => void; // 빈 코드면 새 방
+};
+
+// 메인 메뉴. 뒤에서는 마을이 혼자 돌아간다.
+function Menu({ online, error, prefs, update, invite, onJoin }: MenuProps) {
+  const [open, setOpen] = useState<"join" | "how" | "custom" | "settings" | "name" | null>(null);
+  const [pending, setPending] = useState<string | null>(null); // 이름을 정하면 들어갈 방
+  const [code, setCode] = useState("");
+  const [night, setNight] = useState(false);
+  const nobody = useRef<Positions>(new Map());
+
+  useEffect(() => {
+    document.title = "Feign";
+    const timer = setInterval(() => setNight((n) => !n), 40_000);
+    return () => clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    ambience(night ? { fire: 0.3, crickets: 0.5, water: 0.2 } : { fire: 0.5, water: 0.35 });
+    return () => ambience({});
+  }, [night]);
+
+  const go = (to: string) => {
+    if (prefs.name) return onJoin(to);
+    setPending(to);
+    setOpen("name");
+  };
+  // 초대 링크로 왔는데 이름이 없으면 이름만 묻는다
+  useEffect(() => {
+    if (!invite || prefs.name) return;
+    setPending(invite);
+    setOpen("name");
+  }, [invite, prefs.name]);
+
+  const alert = error && (
+    <p role="alert" className="chip" key={error} style={{ background: "var(--blood)" }}>
+      {short(error)}
+    </p>
+  );
+
+  return (
+    <div className="menu">
+      <div className="bg" aria-hidden>
+        <Village seats={EXTRAS} scene={night ? "night" : "day"} going={null} iconRole={null} shield={false} positions={nobody} demo onPick={() => {}} onMove={() => {}} />
+      </div>
+      <div className="veil" />
+      <div className="left">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img className="logo" src="/logo.png" alt="Feign" />
+        <button className="btn go big" disabled={!online} onClick={() => go("")}>
+          방 만들기
+        </button>
+        <button className="btn big" disabled={!online} onClick={() => setOpen("join")}>
+          참가
+        </button>
+        <button className="btn" onClick={() => setOpen("how")}>
+          게임 방법
+        </button>
+        {open !== "join" && alert}
+      </div>
+      <div className="right">
+        <div className="me">
+          <Preview skin={prefs.skin} hat={prefs.hat} color={COLORS[0]} />
+        </div>
+        <button className="btn" aria-label="이름 바꾸기" onClick={() => setOpen("name")}>
+          {prefs.name || "이름"}
+          <span className="gl">{ICON.pen}</span>
+        </button>
+        <button className="btn" onClick={() => setOpen("custom")}>
+          꾸미기
+        </button>
+      </div>
+      <button className="ib gear" aria-label="설정" onClick={() => setOpen("settings")}>
+        {ICON.gear}
+      </button>
+      <small className="ver">v0.1</small>
+
+      {open && (
+        <Modal
+          key={open}
+          label={{ join: "참가", how: "게임 방법", custom: "꾸미기", settings: "설정", name: "이름" }[open]}
+          width={{ join: 440, how: 960, custom: 1000, settings: 400, name: 380 }[open]}
+          onClose={() => {
+            setOpen(null);
+            setPending(null);
+          }}
+        >
+          {open === "join" && (
+            <form
+              className="flex flex-col items-center gap-5"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (code.length === 4) go(code);
+              }}
+            >
+              <label className="code" aria-label="방 코드">
+                <input
+                  autoFocus
+                  value={code}
+                  maxLength={4}
+                  autoComplete="off"
+                  onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z]/g, ""))}
+                />
+                {[0, 1, 2, 3].map((i) => (
+                  <b key={i} data-on={i === Math.min(code.length, 3)}>
+                    {code[i]}
+                  </b>
+                ))}
+              </label>
+              {alert}
+              <button className="btn go big" disabled={!online || code.length < 4}>
+                들어가기
+              </button>
+              {prefs.last && (
+                <button type="button" className="btn" disabled={!online} onClick={() => go(prefs.last)}>
+                  방금 그 방 {prefs.last}
+                </button>
+              )}
+            </form>
+          )}
+          {open === "how" && (
+            <div className="flex flex-col items-center gap-6">
+              <ol className="how">
+                {HOWTO.map((line, i) => (
+                  <li key={line}>
+                    <div data-n={i}>{[<i key="m" className="moon" />, <i key="s" className="sun" />, <span key="v" className="gl">{ICON.check}</span>, <RoleTile key="r" role="survivor" size="lg" />][i]}</div>
+                    {line}
+                  </li>
+                ))}
+              </ol>
+              <button className="btn go" onClick={() => setOpen(null)}>
+                확인
+              </button>
+            </div>
+          )}
+          {open === "custom" && (
+            <Custom
+              skin={prefs.skin}
+              house={prefs.house}
+              hat={prefs.hat}
+              color={COLORS[0]}
+              onSkin={(skin) => update({ skin })}
+              onHouse={(house) => update({ house })}
+              onHat={(hat) => update({ hat })}
+            />
+          )}
+          {open === "settings" && (
+            <div className="flex flex-col gap-1">
+              <Volume />
+          <Fx />
+              <div className="row">
+                <span className="gl w-12">{ICON.list}</span>
+                <b className="d flex-1 text-lg font-normal">목록으로 보기</b>
+                <button role="switch" aria-checked={prefs.list} aria-label="목록으로 보기" className="sw" onClick={() => update({ list: !prefs.list })} />
+              </div>
+            </div>
+          )}
+          {open === "name" && (
+            <form
+              className="flex flex-col items-center gap-5"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const name = String(new FormData(e.currentTarget).get("name")).trim();
+                if (!name) return;
+                update({ name });
+                setOpen(null);
+                // 초대받은 방에 이름이 겹쳐 못 들어갔다면 고친 이름으로 다시 간다
+                const to = pending ?? (invite || null);
+                if (to !== null) onJoin(to);
+                setPending(null);
+              }}
+            >
+              <input name="name" aria-label="이름" autoFocus required maxLength={12} autoComplete="off" defaultValue={prefs.name} placeholder="이름" className="field w-full text-center" />
+              <button className="btn go">확인</button>
+            </form>
+          )}
+        </Modal>
+      )}
+    </div>
   );
 }
 
@@ -196,7 +522,17 @@ type GameProps = {
   leave: () => void;
 };
 
-// 화면은 view를 그리고 send로 행동을 보내기만 한다. 3D 마을로 바꿀 때 갈아 끼울 자리가 이 컴포넌트다.
+const ROLE_BY_NAME = Object.fromEntries((Object.keys(ROLES) as Role[]).map((r) => [ROLES[r].name, r]));
+// 서버가 주는 표기("의사(시민)", "정신병자·감시자(시민)")에서 그림으로 쓸 역할을 찾는다
+function roleOf(label: string | null): Slot["role"] | null {
+  if (!label) return null;
+  if (label.startsWith(INSANE.name)) return "insane";
+  return ROLE_BY_NAME[label.split("(")[0]] ?? null;
+}
+
+type Open = "info" | "menu" | "custom" | "setup" | "history" | null;
+
+// 화면은 view를 그리고 send로 행동을 보내기만 한다.
 function Game({ view, due, positions, send, leave }: GameProps) {
   const { me, phase, players } = view;
   const isHost = view.hostId === me.id;
@@ -211,16 +547,55 @@ function Game({ view, due, positions, send, leave }: GameProps) {
     ended: view.result || "게임 종료",
   }[phase];
 
-  // 페이즈가 바뀌면 탭 제목과 소리로 알린다
+  const [open, setOpen] = useState<Open>(null);
+  const [asList, setList] = useState(() => loadPrefs().list);
+  const setAsList = (list: boolean) => {
+    setList(list);
+    savePrefs({ ...loadPrefs(), list });
+  };
+  const [copied, setCopied] = useState(false);
+  const [shut, setShut] = useState(""); // 결과 화면을 닫아 둔 판
+
+  // 페이즈가 바뀌면 탭 제목으로 알린다 (소리는 useGameSound)
   const phaseKey = `${phase}-${view.day}`;
-  const lastPhase = useRef(phaseKey);
   useEffect(() => {
     document.title = `${title} · Feign`;
-    if (lastPhase.current !== phaseKey) {
-      lastPhase.current = phaseKey;
-      beep();
-    }
-  }, [phaseKey, title]);
+  }, [title]);
+  useGameSound(view, due);
+
+  // 역할이 정해지는 순간 한 번 크게 보여 준다
+  const hadRole = useRef(me.role !== null);
+  const [reveal, setReveal] = useState(false);
+  useEffect(() => {
+    if (me.role && !hadRole.current) setReveal(true);
+    hadRole.current = me.role !== null;
+  }, [me.role]);
+  useEffect(() => {
+    if (!reveal) return;
+    const timer = setTimeout(() => setReveal(false), 8000);
+    return () => clearTimeout(timer);
+  }, [reveal]);
+
+  // Tab: 마을 사람과 기록, Enter: 말하기
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (document.querySelector("dialog[open]")) return;
+      const tag = e.target instanceof HTMLElement ? e.target.tagName : "";
+      const typing = tag === "INPUT" || tag === "SELECT";
+      if (e.key === "Tab" && !typing) {
+        e.preventDefault();
+        setOpen("info");
+      } else if (e.key === "Enter" && !typing && tag !== "BUTTON") {
+        const input = document.getElementById("chat-in");
+        if (input) {
+          e.preventDefault();
+          input.focus();
+        }
+      } else if (e.key === "Escape" && typing) (e.target as HTMLElement).blur();
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, []);
 
   // 밤에 집(카드)을 누르면 실행할 행동. 임포스터는 살해와 능력 중에서 고른다.
   const targeted: Mode[] = me.modes.filter((m) => m === "kill" || m === "ability");
@@ -228,43 +603,26 @@ function Game({ view, due, positions, send, leave }: GameProps) {
   const mode = targeted.includes(wanted) ? wanted : targeted[0];
   const [guess, setGuess] = useState<Role>("doctor");
   const role = me.role ? ROLES[me.role] : null;
-  const usesLeft = me.uses === null ? "" : ` (${me.uses}회 남음)`;
-  const modeLabel = (m: Mode) =>
-    m === "kill"
-      ? "살해"
-      : m === "ability"
-        ? `${role?.action}${usesLeft}`
-        : m === "armor"
-          ? `갑옷 입기${usesLeft}`
-          : m === "detonate"
-            ? "폭탄 전부 터뜨리기"
-            : "아무것도 안 하기";
-
-  const prompt = !playing
-    ? ""
-    : !me.alive
-      ? me.will
-        ? "사망했습니다. 오늘 낮에 모두에게 유언 한마디를 남길 수 있습니다. 남기거나 낮이 끝나면 모든 역할이 보입니다."
-        : "사망했습니다. 이제 모든 역할이 보입니다."
-      : election
-        ? "시장으로 뽑을 사람에게 투표하세요. 시장은 이후 추방 투표에서 1.1표를 행사합니다. 역할은 선거가 끝나면 정해집니다."
-        : !night
-          ? "추방할 사람에게 투표하세요. 과반을 얻어야 추방됩니다."
-          : !mode
-            ? "오늘 밤 할 행동을 고르세요."
-            : me.both
-              ? `${modeLabel(mode)}: 찾아갈 집을 고르세요. 혼자 남았으니 살해와 능력을 둘 다 쓸 수 있습니다.`
-              : `${modeLabel(mode)}: 찾아갈 집을 고르세요.`;
+  const uses = me.uses === null ? "" : ` ${me.uses}`;
+  const MODE: Record<Mode, { label: string; img: string | null }> = {
+    kill: { label: "살해", img: "serialKiller" },
+    ability: { label: `${role?.action}${uses}`, img: me.role },
+    armor: { label: `갑옷${uses}`, img: "survivor" },
+    detonate: { label: "터뜨리기", img: "bomber" },
+    rest: { label: "쉬기", img: null },
+  };
 
   // 능력을 쓸 수 없는 밤이면 이유를 알려 준다
   const idle =
     !night || !me.alive || me.role === "survivor" || me.modes.includes("ability")
       ? ""
       : me.uses === 0
-        ? " 능력 횟수는 모두 썼습니다."
+        ? "능력을 다 썼다"
         : me.role === "blocker"
-          ? " 어젯밤 능력을 써서 오늘은 쓸 수 없습니다."
+          ? "어제 썼으니 오늘은 쉰다"
           : "";
+  const hint =
+    playing && !me.alive ? (me.will ? "죽었다 · 낮에 유언 한마디" : "죽었다") : me.both ? "혼자 남았다 · 살해와 능력 둘 다" : idle;
 
   // 밤에 집을 골랐을 때. 혼자 남은 임포스터는 살해 대상과 능력 대상을 따로 고른다.
   const visit = (id: string) => {
@@ -275,7 +633,6 @@ function Game({ view, due, positions, send, leave }: GameProps) {
   };
 
   // 좌석별 표시 정보. 마을(3D)과 목록(2D)이 같은 값을 그린다.
-  const [asList, setAsList] = useState(false);
   const seats = players.map((p) => {
     const isMe = p.id === me.id;
     const usable = night
@@ -284,33 +641,32 @@ function Game({ view, due, positions, send, leave }: GameProps) {
     const killing = night && me.act?.mode === "kill" && me.act.target === p.id;
     const aiming = night && (me.act?.mode === "ability" ? me.act.target : me.act?.extra) === p.id;
     const voting = !night && me.pick === p.id;
+    // 집 위 이름표 밑에 붙는 말. 고른 사람은 집 위 딱지(done)로만 알린다.
+    const done = playing && p.alive && p.picked;
     const status = [
-      // 살아 있는 내 역할은 상단에 있으니 뺀다
       !(isMe && playing && me.alive) && p.label,
-      p.won && "승리",
-      phase !== "lobby" && !p.alive && "사망",
-      p.id === view.hostId && "방장",
-      !p.connected && "연결 끊김",
+      !p.connected && "끊김",
       p.doing,
-      killing && "살해 대상",
-      aiming && `${role?.action} 대상`,
-      p.provoked && "선동 +2표",
-      p.bombed && "폭탄 설치됨",
-      p.marked && "양초를 둠",
-      night && me.blocked === p.id && "어젯밤 치료",
-      playing && p.alive && (p.picked ? "선택 완료" : "고민 중"),
+      p.provoked && "+2표",
+      night && me.blocked === p.id && "어제 치료",
     ]
       .filter(Boolean)
-      .join(", ");
+      .join(" · ");
     return {
       id: p.id,
       name: p.name,
+      skin: p.skin,
+      house: p.house,
+      hat: p.hat,
+      done,
       alive: p.alive,
       isMe,
       ally: p.ally,
       mayor: p.mayor,
       enabled: me.alive && p.alive && usable,
       mark: killing ? ("kill" as const) : aiming ? ("aim" as const) : voting ? ("vote" as const) : null,
+      // 이 집에서 보여 줄 내 능력 연출
+      effect: killing ? "kill" : aiming ? me.role : night && p.bombed && me.act?.mode === "detonate" ? "detonate" : null,
       status,
       bombed: p.bombed,
       marked: p.marked,
@@ -318,155 +674,177 @@ function Game({ view, due, positions, send, leave }: GameProps) {
     };
   });
   const pickSeat = (id: string) => (night ? visit(id) : send({ t: "pick", target: id }));
+  const colorOf = Object.fromEntries(players.map((p, i) => [p.name, COLORS[i % COLORS.length]]));
+  const canStart = players.length >= MIN_PLAYERS && (view.setup.auto || view.setup.slots.length === players.length);
 
-  const head = (
-    <div>
-      <h1 className="hud-display text-3xl">
-        {title}
-        {playing && due !== null && <Countdown due={due} />}
-      </h1>
-      <p className="text-sm opacity-80">
-        방 코드 <span className="font-mono text-base ">{view.code}</span>
-        {role && (
-          <>
-            {" · 내 역할 "}
-            <b className="">
-              {role.name} ({TEAM_NAME[me.team]})
-            </b>
-          </>
-        )}
-      </p>
-      {role && <p className="text-sm opacity-80">{role.desc}</p>}
-    </div>
-  );
-  const corner = (
-    <div className="flex shrink-0 items-center gap-2">
-      <button className="px-2 text-sm  underline hover:text-white" onClick={() => setAsList(!asList)}>
-        {asList ? "마을로 보기" : "목록으로 보기"}
-      </button>
-      <button className={subBtn} onClick={leave}>
-        나가기
-      </button>
-    </div>
-  );
-  const news = phase !== "lobby" && view.news.length > 0 && (
-    <section aria-live="polite" className="hud-chip px-4 py-3">
-      {view.news.map((line, i) => (
-        <p key={i} className="hud-display text-lg">
-          {line}
-        </p>
-      ))}
-    </section>
-  );
-  const promptBox = prompt && (
-    <p className="hud-glass px-3 py-2">
-      {prompt}
-      {idle}
-    </p>
-  );
-  const nightModes = night && me.alive && (
-    <div className="flex flex-wrap items-center gap-2">
-      {me.modes.map((m) =>
-        m === "kill" || m === "ability" ? (
-          <button
-            key={m}
-            className={m === "kill" ? "hud-btn hud-btn-danger" : "hud-btn"}
-            aria-pressed={m === mode}
-            onClick={() => setWanted(m)}
-          >
-            {modeLabel(m)}
-          </button>
-        ) : (
-          <button
-            key={m}
-            className="hud-btn"
-            aria-pressed={me.act?.mode === m}
-            onClick={() => send({ t: "act", mode: m })}
-          >
-            {modeLabel(m)}
-          </button>
-        ),
-      )}
-      {me.role === "sorcerer" && (
-        <label className="flex items-center gap-2 text-sm opacity-80">
-          맞힐 역할
-          <select
-            value={guess}
-            onChange={(e) => setGuess(e.target.value as Role)}
-            className="hud-field text-base"
-          >
+  // 밤 행동 고르기. round면 그림 단추(마을 화면), 아니면 글 단추(목록 화면)
+  const modes = (round: boolean) =>
+    night &&
+    me.alive && (
+      <>
+        {me.modes.map((m) => {
+          const aimed = m === "kill" || m === "ability";
+          const pressed = aimed ? m === mode : me.act?.mode === m;
+          const choose = () => (aimed ? setWanted(m) : send({ t: "act", mode: m }));
+          return round ? (
+            <button key={m} aria-pressed={pressed} onClick={choose} className="round out">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <span className="o">{MODE[m].img ? <img src={`/roles/${MODE[m].img}.png`} alt="" /> : <span className="moon" />}</span>
+              {MODE[m].label}
+            </button>
+          ) : (
+            <button key={m} aria-pressed={pressed} onClick={choose} className="btn">
+              {MODE[m].label}
+            </button>
+          );
+        })}
+        {me.role === "sorcerer" && (
+          <select aria-label="맞힐 역할" value={guess} onChange={(e) => setGuess(e.target.value as Role)} className="field">
             {(Object.keys(ROLES) as Role[]).map((r) => (
               <option key={r} value={r}>
                 {ROLES[r].name}
               </option>
             ))}
           </select>
-        </label>
-      )}
-    </div>
+        )}
+      </>
+    );
+  const abstain = phase === "day" && me.alive && (
+    <button className="btn" aria-pressed={me.pick === SKIP} onClick={() => send({ t: "pick", target: SKIP })}>
+      기권
+    </button>
   );
-  const controlsRow = (
-    <div className="flex flex-wrap items-center gap-2">
-      {phase === "day" && me.alive && (
-        <button
-          className="hud-btn"
-          aria-pressed={me.pick === SKIP}
-          onClick={() => send({ t: "pick", target: SKIP })}
-        >
-          기권
+  const lobbyBtns = phase === "lobby" && (
+    <>
+      <button className="btn" onClick={() => setOpen("custom")}>
+        꾸미기
+      </button>
+      <button className="btn" onClick={() => setOpen("setup")}>
+        판 짜기
+      </button>
+      <button
+        className="btn"
+        onClick={() => {
+          void navigator.clipboard?.writeText(`${location.origin}/?room=${view.code}`);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        }}
+      >
+        {copied ? "복사했어요" : "초대 링크"}
+      </button>
+      {isHost && (
+        <button className="btn go big" disabled={!canStart} onClick={() => send({ t: "start" })}>
+          시작
         </button>
       )}
-      {playing && <span className="text-sm opacity-80">{view.pending}명의 선택을 기다리는 중</span>}
-      {phase === "lobby" && (
-        <span className="text-sm opacity-80">
-          {players.length}/{MAX_PLAYERS}명 · 최소 {MIN_PLAYERS}명
-          {!isHost && " · 방장이 시작하기를 기다리는 중"}
-        </span>
-      )}
-      <span className="flex-1" />
-      {isHost && phase === "lobby" && (
-        <button
-          className={btn}
-          disabled={players.length < MIN_PLAYERS || (!view.setup.auto && view.setup.slots.length !== players.length)}
-          onClick={() => send({ t: "start" })}
-        >
-          게임 시작
-        </button>
-      )}
-      {isHost && playing && (
-        <button className={subBtn} onClick={() => send({ t: "next" })}>
-          기다리지 않고 넘기기
-        </button>
-      )}
-      {isHost && phase === "ended" && (
-        <button className={btn} onClick={() => send({ t: "lobby" })}>
-          대기실로
-        </button>
-      )}
-    </div>
+    </>
   );
-  const notesBox = me.notes.length > 0 && (
-    <section>
-      <h2 className="mb-1 text-sm font-medium opacity-80">나만 보는 결과</h2>
-      <ol className="hud-glass flex max-h-32 flex-col gap-1 overflow-y-auto px-3 py-2 text-sm">
-        {me.notes.map((line, i) => (
-          <li key={i}>{line}</li>
-        ))}
-      </ol>
-    </section>
+
+  const modal = open && (
+    <Modal
+      key={open}
+      label={{ info: "마을 사람과 기록", menu: "설정", custom: "꾸미기", setup: "판 짜기", history: "기록" }[open]}
+      width={{ info: 860, menu: 400, custom: 1000, setup: 760, history: 640 }[open]}
+      onClose={() => setOpen(null)}
+    >
+      {open === "info" && <Info view={view} colors={colorOf} />}
+      {open === "custom" && (
+        <Custom
+          skin={players.find((p) => p.id === me.id)!.skin}
+          house={players.find((p) => p.id === me.id)!.house}
+          hat={players.find((p) => p.id === me.id)!.hat}
+          color={COLORS[players.findIndex((p) => p.id === me.id) % COLORS.length]}
+          onSkin={(skin) => send({ t: "skin", skin })}
+          onHouse={(house) => send({ t: "house", house })}
+          onHat={(hat) => send({ t: "hat", hat })}
+        />
+      )}
+      {open === "setup" && <SetupBoard view={view} isHost={isHost} send={send} />}
+      {open === "history" && <History view={view} colors={colorOf} />}
+      {open === "menu" && (
+        <div className="flex flex-col gap-1">
+          <Volume />
+          <Fx />
+          <div className="row">
+            <span className="gl w-12">{ICON.list}</span>
+            <b className="d flex-1 text-lg font-normal">목록으로 보기</b>
+            <button role="switch" aria-checked={asList} aria-label="목록으로 보기" className="sw" onClick={() => setAsList(!asList)} />
+          </div>
+          <div className="hr" />
+          <ul className="keys" aria-label="조작법">
+            <li>
+              <kbd>W</kbd>
+              <kbd>A</kbd>
+              <kbd>S</kbd>
+              <kbd>D</kbd>
+              <em>걷기</em>
+            </li>
+            <li>
+              <i className="mouse l" />
+              <em>고르기</em>
+            </li>
+            <li>
+              <i className="mouse r" />
+              <em>시점</em>
+            </li>
+            <li>
+              <kbd>Tab</kbd>
+              <em>사람들</em>
+            </li>
+            <li>
+              <kbd>Enter</kbd>
+              <em>말하기</em>
+            </li>
+          </ul>
+          <div className="hr" />
+          <div className="flex gap-3">
+            {isHost && playing && (
+              <button
+                className="btn flex-1"
+                onClick={() => {
+                  send({ t: "next" });
+                  setOpen(null);
+                }}
+              >
+                <span className="gl">{ICON.skip}</span>
+                넘기기
+              </button>
+            )}
+            <button className="btn flex-1" onClick={leave}>
+              <span className="gl">{ICON.out}</span>
+              나가기
+            </button>
+          </div>
+        </div>
+      )}
+    </Modal>
   );
 
   if (asList)
     return (
-      <>
-        <header className="flex items-start justify-between gap-2">
-          {head}
-          {corner}
+      <div className="paper mx-auto my-4 flex w-full max-w-3xl flex-col gap-4 p-4">
+        <header className="flex items-center justify-between gap-2">
+          <h1 className="d text-3xl">
+            {title} {playing && due !== null && <Countdown due={due} />}
+          </h1>
+          <div className="flex gap-2">
+            <button className="ib" aria-label="마을 사람과 기록" onClick={() => setOpen("info")}>
+              {ICON.list}
+            </button>
+            <button className="ib" aria-label="설정" onClick={() => setOpen("menu")}>
+              {ICON.gear}
+            </button>
+          </div>
         </header>
-        {news}
-        {promptBox}
-        {phase === "lobby" && <SetupBoard view={view} isHost={isHost} send={send} />}
-        {nightModes}
+        {phase !== "lobby" && view.news.length > 0 && (
+          <section aria-live="polite" className="d text-lg">
+            {view.news.map((line, i) => (
+              <p key={i}>{line}</p>
+            ))}
+          </section>
+        )}
+        {hint && <p className="d">{hint}</p>}
+        <div className="flex flex-wrap items-center gap-2">{modes(false)}</div>
         <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           {seats.map((s) => (
             <li key={s.id}>
@@ -474,254 +852,641 @@ function Game({ view, due, positions, send, leave }: GameProps) {
                 disabled={!s.enabled}
                 aria-pressed={!!s.mark}
                 onClick={() => pickSeat(s.id)}
-                className={`hud-glass flex w-full flex-col items-start border-2 px-3 py-2 text-left disabled:cursor-default ${
-                  s.mark ? "border-[var(--sun)]" : "border-transparent"
-                } ${s.alive ? "enabled:hover:border-[var(--parchment)]" : "opacity-40"}`}
+                className={`btn w-full flex-col !items-start !gap-0 text-left ${s.alive ? "" : "line-through"}`}
               >
-                <span className="font-medium">
+                <span>
                   {s.mayor && "시장 "}
                   {s.name}
                   {s.isMe && " (나)"}
                 </span>
-                <span className="text-xs opacity-80">{s.status || "\u00a0"}</span>
+                <span className="text-xs">{[s.status, s.done && "✓"].filter(Boolean).join(" · ") || " "}</span>
               </button>
             </li>
           ))}
         </ul>
-        {controlsRow}
-        <Chat view={view} send={send} />
-        {notesBox}
-      </>
+        <div className="flex flex-wrap items-center gap-3">
+          {abstain}
+          {lobbyBtns}
+          {isHost && phase === "ended" && (
+            <button className="btn go" onClick={() => send({ t: "lobby" })}>
+              대기실로
+            </button>
+          )}
+          {phase === "ended" && (
+            <button className="btn" onClick={() => setOpen("history")}>
+              기록 보기
+            </button>
+          )}
+        </div>
+        <Chat view={view} send={send} colors={colorOf} />
+        {modal}
+      </div>
     );
 
-  // 마을이 화면 전체를 채우고, HUD는 가장자리에만 얹는다. 빈 곳을 누르면 마을이 눌린다.
-  // 구성은 원작을 따른다: 위에 역할 패·시계·메뉴, 아래에 대화·행동·내 패.
-  const colorOf = Object.fromEntries(players.map((p, i) => [p.name, COLORS[i % COLORS.length]]));
+  // 소식은 결과만 띄운다. 누가 누구를 찍었는지 같은 긴 줄은 Tab 창의 지난 일에 있다.
+  const brief = view.news.filter((line) => !line.includes("→") && !line.startsWith("역할이 정해졌"));
+  // 마을이 화면 전체를 채우고, HUD는 가장자리에 꼭 필요한 것만 얹는다. 나머지는 Tab 창에 있다.
+  const wash = { innocent: "79 165 74", imposter: "217 68 58", neutral: "61 143 214", solo: "61 143 214", draw: "140 140 140" };
   return (
     <div className="fixed inset-0 z-10">
       <Village
         seats={seats}
         scene={phase}
         going={night ? (me.act?.target ?? me.act?.extra ?? null) : null}
+        iconRole={night && me.alive && (me.act?.mode === "ability" || me.act?.extra) ? me.role : null}
+        shield={night && me.act?.mode === "armor"}
         positions={positions}
         onPick={pickSeat}
         onMove={(x, z) => send({ t: "move", x, z })}
       />
-      <div className="pointer-events-none absolute inset-0 flex flex-col justify-between gap-3 p-3">
-        <div className="grid grid-cols-[1fr_auto_1fr] items-start gap-3">
-          <div>
-            {view.roster.length > 0 && (
-              <ul aria-label="이번 판의 역할" className="hud-glass pointer-events-auto inline-flex max-w-full flex-wrap gap-1 p-1.5">
-                {view.roster.map((r, i) => (
-                  <li key={i}>
-                    <RoleTile role={r} />
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-
-          <div className="flex flex-col items-center gap-2">
-            <div className="hud-glass hud-display flex items-center gap-2.5 px-4 py-1 text-3xl leading-none">
-              {playing && due !== null && <Countdown due={due} />}
-              {playing && <span className={night ? "hud-moon" : "hud-sun"} aria-hidden />}
-              <span className="text-lg">{title}</span>
+      <div className="pointer-events-none absolute inset-0 *:pointer-events-auto">
+        <div className="!pointer-events-none absolute inset-x-0 top-0 flex flex-col items-center gap-2">
+          {phase !== "ended" && (
+            <div className="clock paper">
+              {playing && <div className={night ? "moon" : "sun"} aria-hidden />}
+              <div>
+                <small>{phase === "lobby" ? `방 · ${players.length}/${MAX_PLAYERS}` : title}</small>
+                <div className="t">{phase === "lobby" ? view.code : due !== null && <Countdown due={due} />}</div>
+              </div>
             </div>
-            {phase !== "lobby" && view.news.length > 0 && (
-              <section key={phaseKey} aria-live="polite" className="hud-sign pointer-events-auto max-w-xl px-4 py-2 text-center">
-                {view.news.map((line, i) => (
-                  <p key={i} className="hud-display text-lg leading-snug">
-                    {line}
-                  </p>
-                ))}
-              </section>
-            )}
-          </div>
+          )}
+          {playing && brief.length > 0 && (
+            <section key={phaseKey} aria-live="polite" className="toast paper max-w-[min(36rem,90vw)]">
+              {brief.map((line, i) => (
+                <p key={i}>{line}</p>
+              ))}
+            </section>
+          )}
+        </div>
 
-          <div className="pointer-events-auto flex items-center justify-end gap-2">
-            <span className="hud-glass hud-display px-3 py-1.5">방 {view.code}</span>
-            <button className="hud-btn" onClick={() => setAsList(true)}>
-              목록
-            </button>
-            <button className="hud-btn" onClick={leave}>
-              나가기
-            </button>
+        <div className="absolute right-4 top-3.5 flex gap-2.5">
+          <button className="ib" aria-label="마을 사람과 기록 (Tab)" onClick={() => setOpen("info")}>
+            {ICON.list}
+          </button>
+          <button className="ib" aria-label="설정" onClick={() => setOpen("menu")}>
+            {ICON.gear}
+          </button>
+        </div>
+
+        <div className="absolute bottom-4 left-4 w-[360px] max-w-[45vw]">
+          <Chat view={view} send={send} colors={colorOf} hud />
+        </div>
+
+        <div className="absolute bottom-5 left-1/2 flex -translate-x-1/2 flex-col items-center gap-3">
+          {hint && <p className="chip">{hint}</p>}
+          <div className="flex items-end gap-4">
+            {modes(true)}
+            {abstain}
+            {lobbyBtns}
+            {phase === "ended" && (
+              <button className="btn go" onClick={() => setShut("")}>
+                결과
+              </button>
+            )}
           </div>
         </div>
 
-        <div className="grid grid-cols-[1fr_auto_1fr] items-end gap-3">
-          <div className="pointer-events-auto w-80 max-w-full">
-            <Chat view={view} send={send} colors={colorOf} hud />
-          </div>
+        {role && me.role && (
+          <button
+            className="absolute bottom-4 right-4 flex flex-col items-center gap-1.5"
+            aria-label={`내 역할 ${role.name}, 자세히 보기`}
+            onClick={() => setOpen("info")}
+          >
+            <RoleTile role={me.role} size="lg" />
+            <span className="out text-xl">{role.name}</span>
+          </button>
+        )}
 
-          <div className="pointer-events-auto flex max-w-2xl flex-col items-center gap-2">
-            {prompt && (
-              <p className="hud-chip hud-display px-3 py-1 text-center text-base">
-                {prompt}
-                {idle}
-              </p>
-            )}
-            {phase === "lobby" && <SetupBoard view={view} isHost={isHost} send={send} />}
-            {nightModes}
-            <div className="hud-shadow">{controlsRow}</div>
+        {reveal && role && me.role && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-10 p-6">
+            <div className="wash" style={{ "--w1": `rgb(${wash[me.team]} / .55)`, "--w2": "rgb(255 201 60 / .32)" } as React.CSSProperties} />
+            <div className="paper relative flex w-[360px] max-w-full -rotate-1 flex-col items-center gap-3.5 !border-[5px] px-6 py-7 text-center !shadow-[0_12px_0_var(--ink),0_30px_60px_rgb(0_0_0/.45)]">
+              <RoleTile role={me.role} size="xl" />
+              <h1 className="d text-7xl leading-none">{role.name}</h1>
+              <span className={`tag ${me.team} !px-5 !text-xl`}>{TEAM_NAME[me.team]}</span>
+              <p className="leading-relaxed">{role.desc}</p>
+            </div>
+            <button autoFocus className="btn go big relative" onClick={() => setReveal(false)}>
+              확인
+            </button>
           </div>
+        )}
 
-          <div className="flex justify-end">
-            <aside className="hud-glass pointer-events-auto w-64 max-w-full p-2.5">
-              {role && me.role ? (
-                <>
-                  <div className="flex items-center gap-2.5">
-                    <RoleTile role={me.role} big />
-                    <div>
-                      <p className="hud-display text-xl leading-tight">{role.name}</p>
-                      <p className="text-xs">
-                        {TEAM_NAME[me.team]} 편{me.uses !== null && `, 능력 ${me.uses}회 남음`}
-                      </p>
-                    </div>
-                  </div>
-                  <p className="mt-2 text-xs leading-5">{role.desc}</p>
-                </>
-              ) : (
-                <p className="hud-display">{phase === "lobby" ? "친구들을 기다리는 중" : "역할은 선거 뒤에 정해집니다"}</p>
+        {phase === "ended" && shut !== phaseKey && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center gap-7 overflow-y-auto px-6 py-[8vh]">
+            <div
+              className="wash !fixed"
+              style={{ "--w1": `rgb(${wash[view.winner ?? "draw"]} / .5)`, "--w2": "rgb(255 201 60 / .45)" } as React.CSSProperties}
+            />
+            {Array.from({ length: 24 }, (_, i) => (
+              <span
+                key={i}
+                aria-hidden
+                className="bit"
+                style={{
+                  left: `${(i * 37 + 5) % 96}%`,
+                  top: `${(i * 53) % 36}%`,
+                  rotate: `${((i * 47) % 120) - 60}deg`,
+                  background: ["#ffc93c", "#4fa54a", "#f6ecd0", "#3d8fd6", "#d9443a"][i % 5],
+                }}
+              />
+            ))}
+            <h1 className="title relative">{view.result}</h1>
+            {view.why && <p className="out relative text-xl">{view.why}</p>}
+            <ul className="relative flex flex-wrap justify-center gap-3.5">
+              {players.map((p, i) => {
+                const r = roleOf(p.label);
+                return (
+                  <li key={p.id} className={`pc paper ${p.won ? "" : "lose"}`}>
+                    <i style={{ background: COLORS[i % COLORS.length] }} />
+                    <b>{p.name}</b>
+                    {r && <RoleTile role={r} />}
+                    <span className="d">{p.label?.split("(")[0]}</span>
+                  </li>
+                );
+              })}
+            </ul>
+            <div className="relative flex flex-wrap items-center justify-center gap-4">
+              <button className="btn" onClick={() => setOpen("history")}>
+                기록 보기
+              </button>
+              {isHost && (
+                <button className="btn go big" onClick={() => send({ t: "lobby" })}>
+                  대기실로
+                </button>
               )}
-              {me.notes.length > 0 && (
-                <details open className="mt-2 border-t border-[var(--parchment)]/30 pt-2">
-                  <summary className="hud-display cursor-pointer text-sm">나만 아는 것 {me.notes.length}</summary>
-                  <ol className="mt-1 flex max-h-28 flex-col gap-1 overflow-y-auto text-xs leading-5">
-                    {me.notes.map((line, i) => (
-                      <li key={i}>{line}</li>
-                    ))}
-                  </ol>
-                </details>
-              )}
-              <details className="mt-2 border-t border-[var(--parchment)]/30 pt-2">
-                <summary className="hud-display cursor-pointer text-sm">조작법</summary>
-                <p className="mt-1 text-xs leading-5">
-                  WASD나 방향키로 걷고, 집이나 사람을 눌러 고릅니다. 오른쪽 버튼을 끌면 시점이 돌고 휠로 당겨 봅니다.
-                </p>
-              </details>
-            </aside>
+              <button className="btn" onClick={() => setShut(phaseKey)}>
+                마을 보기
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
+      {modal}
     </div>
   );
 }
 
-// 역할 패. public/roles/<역할 id>.png 그림이 있으면 그것을, 없으면 한 글자를 보여 준다.
-function RoleTile({ role, big = false }: { role: Slot["role"]; big?: boolean }) {
+// 소리 크기. 0이면 끔.
+// 설정의 화면 효과 스위치. 끄면 색 보정·번짐·테두리 그늘 없이 그린다.
+function Fx() {
+  const on = useFx();
+  return (
+    <div className="row">
+      <span className="gl w-12">{ICON.fx}</span>
+      <b className="d flex-1 text-lg font-normal">화면 효과</b>
+      <button role="switch" aria-checked={on} aria-label="화면 효과" className="sw" onClick={() => setFx(!on)} />
+    </div>
+  );
+}
+
+function Volume() {
+  const [v, setV] = useState(volume);
+  const set = (next: number) => {
+    setVolume(next);
+    setV(next);
+  };
+  return (
+    <div className="row">
+      <button className="ib" aria-label={v ? "소리 끄기" : "소리 켜기"} onClick={() => set(v ? 0 : 0.6)}>
+        {speaker(v)}
+      </button>
+      <input
+        type="range"
+        aria-label="소리 크기"
+        min={0}
+        max={1}
+        step={0.05}
+        value={v}
+        onChange={(e) => set(Number(e.target.value))}
+        onPointerUp={() => play("confirm")}
+        className="vol"
+        style={{ "--v": `${v * 100}%` } as React.CSSProperties}
+      />
+    </div>
+  );
+}
+
+// 가운데 뜨는 창. dialog라서 Esc로 닫히고 포커스가 안에 갇힌다.
+function Modal({ label, width, onClose, children }: { label: string; width: number; onClose: () => void; children: React.ReactNode }) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (!ref.current?.open) ref.current?.showModal();
+    ref.current?.querySelector("input")?.focus(); // 입력칸이 있는 창은 닫기 단추 말고 거기서 시작한다
+    play("open");
+    return () => play("close");
+  }, []);
+  return (
+    <dialog
+      ref={ref}
+      aria-label={label}
+      className="sheet paper"
+      style={{ width }}
+      onClose={onClose}
+      onClick={(e) => e.target === ref.current && onClose()}
+    >
+      <button className="ib x" aria-label="닫기" onClick={onClose}>
+        {ICON.close}
+      </button>
+      <div className="body">{children}</div>
+    </dialog>
+  );
+}
+
+// 역할 패. public/roles/<역할 id>.png 그림이 없으면 한 글자를 보여 준다.
+function RoleTile({ role, size = "", off = false }: { role: Slot["role"]; size?: "" | "sm" | "lg" | "xl"; off?: boolean }) {
   const [missing, setMissing] = useState(false);
   const info = role === "insane" ? INSANE : ROLES[role];
   return (
-    <span
-      className={`hud-tile overflow-hidden ${missing ? "" : "hud-tile-img"} ${big ? "!h-12 !w-12 !text-2xl" : ""}`}
-      title={`${info.name}: ${info.desc}`}
-    >
+    <span className={`tile ${size} ${off ? "off" : ""}`} title={`${info.name}: ${info.desc}`}>
       {missing ? (
         ROLE_MARK[role]
       ) : (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={`/roles/${role}.png`} alt={info.name} className="h-full w-full object-cover" onError={() => setMissing(true)} />
+        <img src={`/roles/${role}.png`} alt={info.name} onError={() => setMissing(true)} />
       )}
     </span>
   );
 }
 
-const TEAM_COLOR: Record<Team, string> = { innocent: "#46a758", imposter: "#d9443a", neutral: "#0090ff" };
+type Colors = Record<string, string>;
 
-// 대기실의 판 짜기. 방장은 이번 판에 넣을 역할과 시간을 고르고, 나머지는 지켜본다.
-function SetupBoard({ view, isHost, send }: { view: View; isHost: boolean; send: (m: object) => void }) {
-  const { setup } = view;
-  const people = view.players.length;
-  const change = (next: Partial<View["setup"]>) => send({ t: "setup", ...setup, ...next });
-  const count = (team: Team) => setup.slots.filter((s) => s.team === team).length;
-
+// 색 머리와 이름. bare면 머리만.
+function Face({ name, colors, bare = false }: { name: string; colors: Colors; bare?: boolean }) {
   return (
-    <section className="hud-glass w-full max-w-2xl p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="hud-display text-xl">이번 판에 넣을 역할</h2>
-        {isHost ? (
-          <div className="flex gap-2">
-            <button className="hud-btn" aria-pressed={setup.auto} onClick={() => change({ auto: true })}>
-              알아서 뽑기
-            </button>
-            <button className="hud-btn" aria-pressed={!setup.auto} onClick={() => change({ auto: false })}>
-              직접 고르기
-            </button>
-          </div>
-        ) : (
-          <span className="text-sm">방장이 정합니다</span>
-        )}
-      </div>
+    <span className="face" title={name}>
+      <i style={{ background: colors[name] ?? "#8b8d98" }} />
+      {bare ? <span className="sr-only">{name}</span> : name}
+    </span>
+  );
+}
 
-      {setup.auto ? (
-        <p className="mt-2 text-sm">인원수에 맞춰 무작위로 뽑습니다.</p>
-      ) : (
-        <>
-          <ul className="mt-3 flex min-h-10 flex-wrap gap-1.5">
-            {setup.slots.map((slot, i) => (
+// 죽거나 쫓겨나며 드러난 정체: 역할 패와 편
+function Reveal({ label }: { label?: string }) {
+  if (!label) return null;
+  const role = roleOf(label);
+  return (
+    <>
+      {role && <RoleTile role={role} size="sm" />}
+      <span className="text-xs opacity-75">{role ? (label.match(/\((.+)\)/)?.[1] ?? "") : label}</span>
+    </>
+  );
+}
+
+function StepRow({ step, colors }: { step: Step; colors: Colors }) {
+  if (step.kind === "text") return <li className="opacity-75">{step.text}</li>;
+  if (step.kind !== "votes" && step.kind !== "go" && step.kind !== "hit")
+    return (
+      <li>
+        <Face name={step.who} colors={colors} />
+        <span className="gl" title={{ dead: "사망", out: "추방", mayor: "시장" }[step.kind]}>
+          {{ dead: ICON.grave, out: ICON.out, mayor: ICON.crown }[step.kind]}
+        </span>
+        <Reveal label={step.reveal} />
+      </li>
+    );
+  if (step.kind === "go")
+    return (
+      <li className={step.off ? "off" : undefined} title={step.title}>
+        <Face name={step.by} colors={colors} />
+        {step.role ? <RoleTile role={step.role as Slot["role"]} size="sm" /> : <span className="gl">{ICON.knife}</span>}
+        {step.fake && <span className="text-xs opacity-75">가짜</span>}
+        {step.to && (
+          <>
+            <span className="gl">{ICON.to}</span>
+            <Face name={step.to} colors={colors} />
+          </>
+        )}
+        {step.off && <span className="text-xs">막힘</span>}
+      </li>
+    );
+  if (step.kind === "hit")
+    return (
+      <li title={step.title}>
+        <Face name={step.to} colors={colors} />
+        <span className="gl" title={step.died ? "사망" : "살았다"}>
+          {step.died ? ICON.grave : ICON.shield}
+        </span>
+      </li>
+    );
+  // 표: 받은 사람별로 모아, 던진 사람들의 머리 → 받은 사람 + 표 수
+  const to = [...new Set(step.ballots.map((b) => b.to))].sort((a, b) => (step.tally[b ?? ""] ?? -1) - (step.tally[a ?? ""] ?? -1));
+  return (
+    <>
+      {to.map((t) => (
+        <li key={t ?? ""} className={t ? undefined : "opacity-60"}>
+          <span className="heads">
+            {step.ballots
+              .filter((b) => b.to === t)
+              .map((b) => (
+                <Face key={b.by} name={b.by} colors={colors} bare />
+              ))}
+          </span>
+          <span className="gl">{ICON.to}</span>
+          {t ? <Face name={t} colors={colors} /> : "기권"}
+          {t && step.tally[t] !== undefined && <b className="cnt">{step.tally[t]}</b>}
+        </li>
+      ))}
+    </>
+  );
+}
+
+// 지난 일: 밤과 낮이 번갈아 놓이는 칸
+function Timeline({ periods, colors }: { periods: Period[]; colors: Colors }) {
+  if (!periods.length) return <p className="text-[15px] opacity-60">아직 없다</p>;
+  return (
+    <ol className="flex flex-col gap-2">
+      {periods.map((p, i) => (
+        <li key={i} className={`per ${p.night ? "night" : ""}`}>
+          <div className="when">
+            <i className={p.night ? "moon" : "sun"} />
+            {p.label}
+          </div>
+          <ol>
+            {p.steps.map((s, j) => (
+              <StepRow key={j} step={s} colors={colors} />
+            ))}
+          </ol>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+// Tab 창: 늘 띄워 두지 않는 정보를 한곳에 모은다
+function Info({ view, colors }: { view: View; colors: Colors }) {
+  const { me, phase } = view;
+  const playing = phase === "night" || phase === "day";
+  const role = me.role ? ROLES[me.role] : null;
+  const periods = periodsOf(view.chat.filter((c) => c.name === "").map((c) => c.text));
+  return (
+    <div className="grid gap-8 sm:grid-cols-[260px_1fr]">
+      <div>
+        <h3>
+          마을 사람{playing && view.pending > 0 && ` · ${view.pending}명 남음`}
+        </h3>
+        {view.players.map((p) => (
+          <div key={p.id} className={`pl ${phase !== "lobby" && !p.alive ? "dead" : ""}`}>
+            <i className="h-6 w-6 flex-none rounded-full border-[2.5px] border-[var(--ink)]" style={{ background: colors[p.name] }} />
+            <b className="min-w-0 flex-1 truncate">
+              {p.name}
+              {p.id === me.id && " (나)"}
+            </b>
+            {p.mayor && (
+              <span className="gl" title="시장">
+                {ICON.crown}
+              </span>
+            )}
+            <span className="text-xs opacity-70">{[p.id === view.hostId && "방장", !p.connected && "끊김"].filter(Boolean).join(" · ")}</span>
+            <Reveal label={p.label ?? undefined} />
+            {playing && p.alive && p.picked && (
+              <b className="cnt" aria-label="골랐음">
+                ✓
+              </b>
+            )}
+          </div>
+        ))}
+        <p className="d mt-4 opacity-60">방 {view.code}</p>
+      </div>
+      <div>
+        {role && me.role && (
+          <div className="flex items-center gap-3.5">
+            <RoleTile role={me.role} size="lg" />
+            <div>
+              <p className="d text-3xl">
+                {role.name} <span className={`tag ${me.team} align-middle !text-xs`}>{TEAM_NAME[me.team]}</span>
+              </p>
+              <p className="mt-1.5 text-[15px] leading-relaxed">
+                {role.desc}
+                {me.uses !== null && ` (${me.uses}회 남음)`}
+              </p>
+            </div>
+          </div>
+        )}
+        {view.roster.length > 0 && (
+          <ul className="mt-4 flex flex-wrap gap-2" aria-label="이번 판 역할">
+            {view.roster.map((r, i) => (
               <li key={i}>
-                <button
-                  disabled={!isHost}
-                  aria-label={`${slot.role === "insane" ? INSANE.name : ROLES[slot.role].name} 빼기`}
-                  onClick={() => change({ slots: setup.slots.filter((_, j) => j !== i) })}
-                  className="block rounded-lg border-b-4 pb-0.5 disabled:cursor-default"
-                  style={{ borderColor: TEAM_COLOR[slot.team] }}
-                >
-                  <RoleTile role={slot.role} />
-                </button>
+                <RoleTile role={r} size="sm" />
               </li>
             ))}
           </ul>
-          <p className="mt-1 text-sm">
-            역할 {setup.slots.length}개 (시민 {count("innocent")}, 임포스터 {count("imposter")}, 중립 {count("neutral")}), 지금 {people}명.
-            {setup.slots.length !== people && " 수가 같아야 시작할 수 있어요."}
-          </p>
-          {isHost &&
-            (Object.keys(POOL) as Team[]).map((team) => (
-              <div key={team} className="mt-2 flex items-center gap-2">
-                <span className="hud-display w-20 shrink-0 border-b-4 text-sm" style={{ borderColor: TEAM_COLOR[team] }}>
-                  {TEAM_NAME[team]}
-                </span>
-                <div className="flex flex-wrap gap-1.5">
-                  {POOL[team].map((role) => (
-                    <button
-                      key={role}
-                      disabled={setup.slots.length >= MAX_PLAYERS}
-                      aria-label={`${role === "insane" ? INSANE.name : ROLES[role].name} 넣기`}
-                      onClick={() => change({ slots: [...setup.slots, { role, team }] })}
-                      className="disabled:opacity-40"
-                    >
-                      <RoleTile role={role} />
-                    </button>
-                  ))}
-                </div>
+        )}
+        {(role || view.roster.length > 0) && <div className="hr" />}
+        {me.notes.length > 0 && (
+          <>
+            <h3>나만 아는 것</h3>
+            <ol className="memo">
+              {me.notes.map((line, i) => (
+                <li key={i}>{line}</li>
+              ))}
+            </ol>
+            <div className="hr" />
+          </>
+        )}
+        <h3>지난 일</h3>
+        <Timeline periods={periods} colors={colors} />
+      </div>
+    </div>
+  );
+}
+
+// 꾸미기 창: 내 캐릭터와 집. 방 밖(메뉴)에서도 열 수 있게 값과 콜백만 받는다.
+type CustomProps = {
+  skin: Skin;
+  house: House;
+  hat: Hat;
+  color: string; // 기본 캐릭터 몸에 칠할 내 색
+  onSkin: (skin: Skin) => void;
+  onHouse: (house: House) => void;
+  onHat: (hat: Hat) => void;
+};
+function Custom({ skin, house, hat, color, onSkin, onHouse, onHat }: CustomProps) {
+  const [tab, setTab] = useState<"skin" | "house" | "hat">("skin");
+  const mine = { skin, house, hat };
+  const thumb = (h: House) => (h === "house" ? null : `/models/thumbs/${h}.png`);
+  return (
+    <>
+      <div className="tabs" role="tablist">
+        <button role="tab" aria-selected={tab === "skin"} onClick={() => setTab("skin")}>
+          캐릭터
+        </button>
+        <button role="tab" aria-selected={tab === "house"} onClick={() => setTab("house")}>
+          집
+        </button>
+        <button role="tab" aria-selected={tab === "hat"} onClick={() => setTab("hat")}>
+          모자
+        </button>
+      </div>
+      <div className="grid gap-7 md:grid-cols-[1fr_290px]">
+        <div className="flex flex-wrap content-start gap-4">
+          {tab === "skin"
+            ? SKINS.map((skin) => (
+                <button key={skin} className="opt" aria-label={SKIN_NAME[skin]} aria-pressed={mine.skin === skin} onClick={() => onSkin(skin)}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={`/models/thumbs/skin-${skin}.png`} alt="" />
+                </button>
+              ))
+            : tab === "hat"
+              ? HATS.map((h) => (
+                  <button key={h} className="opt" aria-label={HAT_NAME[h]} aria-pressed={mine.hat === h} onClick={() => onHat(h)}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    {h === "none" ? HAT_NAME[h] : <img src={`/models/thumbs/hat-${h}.png`} alt="" />}
+                  </button>
+                ))
+              : HOUSES.map((h) => (
+                <button key={h} className="opt" aria-label={HOUSE_NAME[h]} aria-pressed={mine.house === h} onClick={() => onHouse(h)}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  {thumb(h) ? <img src={thumb(h)!} alt="" /> : HOUSE_NAME[h]}
+                </button>
+              ))}
+        </div>
+        <div className="flex flex-col items-center gap-4">
+          {/* 어느 탭에서든 내 캐릭터가 보이고, 고른 집은 그 밑에 작게 */}
+          <div className="opt !h-60 !w-full">
+            <Preview skin={mine.skin} hat={mine.hat} color={color} />
+          </div>
+          {thumb(mine.house) && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={thumb(mine.house)!} alt={HOUSE_NAME[mine.house]} className="h-20 w-20" />
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// 판 짜기 창. 방장은 이번 판에 넣을 역할과 시간을 고르고, 나머지는 지켜본다.
+// ponytail: 역할마다 켜고 끄기만 한다(같은 역할 두 장 불가). 필요해지면 패마다 개수 조절을.
+function SetupBoard({ view, isHost, send }: { view: View; isHost: boolean; send: (m: object) => void }) {
+  const { setup } = view;
+  const [tab, setTab] = useState<"roles" | "time">("roles");
+  const change = (next: Partial<View["setup"]>) => send({ t: "setup", ...setup, ...next });
+  const count = (team: Team) => setup.slots.filter((s) => s.team === team).length;
+  // 같은 역할이 시민 편에도 임포스터 편에도 있으므로 편까지 맞춰 본다
+  const has = (role: Slot["role"], team: Team) => setup.slots.some((s) => s.role === role && s.team === team);
+  const toggle = (role: Slot["role"], team: Team) =>
+    change({
+      auto: false,
+      slots: has(role, team) ? setup.slots.filter((s) => !(s.role === role && s.team === team)) : [...setup.slots, { role, team }],
+    });
+
+  return (
+    <>
+      <div className="tabs" role="tablist">
+        <button role="tab" aria-selected={tab === "roles"} onClick={() => setTab("roles")}>
+          역할
+        </button>
+        <button role="tab" aria-selected={tab === "time"} onClick={() => setTab("time")}>
+          시간
+        </button>
+      </div>
+      {tab === "roles" ? (
+        <>
+          <div className={`flex flex-col gap-5 ${setup.auto ? "opacity-50" : ""}`}>
+            {(Object.keys(POOL) as Team[]).map((team) => (
+              <div key={team} className="flex flex-wrap items-center gap-3" role="group" aria-label={TEAM_NAME[team]}>
+                <span className={`tag ${team} w-20 text-center`}>{TEAM_NAME[team]}</span>
+                {POOL[team].map((role) => (
+                  <button
+                    key={role}
+                    disabled={!isHost || (!has(role, team) && setup.slots.length >= MAX_PLAYERS)}
+                    aria-pressed={!setup.auto && has(role, team)}
+                    aria-label={`${TEAM_NAME[team]} ${role === "insane" ? INSANE.name : ROLES[role].name}`}
+                    onClick={() => toggle(role, team)}
+                  >
+                    <RoleTile role={role} off={setup.auto || !has(role, team)} />
+                  </button>
+                ))}
               </div>
             ))}
+          </div>
+          <div className="hr" />
+          <div className="flex flex-wrap items-center gap-2.5">
+            {!setup.auto && (
+              <>
+                {(Object.keys(POOL) as Team[]).map((team) => (
+                  <span key={team} className={`tag ${team}`} aria-label={`${TEAM_NAME[team]} ${count(team)}`}>
+                    {count(team)}
+                  </span>
+                ))}
+                <span className="d ml-1" style={{ color: setup.slots.length === view.players.length ? undefined : "var(--blood)" }}>
+                  {setup.slots.length} / {view.players.length}명
+                </span>
+              </>
+            )}
+            <span className="flex-1" />
+            <button className="btn" disabled={!isHost} aria-pressed={setup.auto} onClick={() => change({ auto: !setup.auto })}>
+              알아서 섞기
+            </button>
+          </div>
         </>
-      )}
-
-      <div className="mt-3 flex flex-wrap items-center gap-4 text-sm">
-        {(["night", "day"] as const).map((key) => (
-          <label key={key} className="flex items-center gap-2">
-            {key === "night" ? "밤 시간" : "낮 시간"}
-            <select
-              className="hud-field py-1"
-              disabled={!isHost}
-              value={setup[key]}
-              onChange={(e) => change({ [key]: Number(e.target.value) })}
-            >
+      ) : (
+        <div className="flex flex-col gap-5">
+          {(["night", "day"] as const).map((key) => (
+            <div key={key} className="flex flex-wrap items-center gap-3" role="group" aria-label={key === "night" ? "밤 시간" : "낮 시간"}>
+              <span className={key === "night" ? "moon" : "sun"} aria-hidden />
               {(key === "night" ? NIGHT_CHOICES : DAY_CHOICES).map((sec) => (
-                <option key={sec} value={sec}>
+                <button key={sec} className="btn" disabled={!isHost} aria-pressed={setup[key] === sec} onClick={() => change({ [key]: sec })}>
                   {sec}초
-                </option>
+                </button>
               ))}
-            </select>
-          </label>
-        ))}
-      </div>
-    </section>
+            </div>
+          ))}
+          <button className="btn self-start" disabled={!isHost} aria-pressed={setup.calm} onClick={() => change({ calm: !setup.calm })}>
+            첫 밤은 아무도 안 죽기
+          </button>
+        </div>
+      )}
+    </>
   );
+}
+
+const HIT: Record<string, string> = { curse: "저주", sk: "살해", bomb: "폭발", kill: "살해", thief: "도둑질", haunt: "양초" };
+
+// 끝난 판의 기록. 밤마다 누가 누구 집에 갔고 낮마다 표가 어디로 갔는지.
+function History({ view, colors }: { view: View; colors: Colors }) {
+  const who = (id: string | null) => view.players.find((p) => p.id === id);
+  const name = (id: string | null) => who(id)?.name ?? "?";
+  const periods: Period[] = (view.history ?? []).map((h) => {
+    if (h.kind === "day") {
+      const chosen = who(h.chosen);
+      return {
+        night: false,
+        label: h.day === 0 ? "시장 선거" : `${h.day}일차 낮`,
+        steps: [
+          {
+            kind: "votes",
+            ballots: h.ballots.map((b) => ({ by: name(b.by), to: who(b.to)?.name ?? null })),
+            tally: Object.fromEntries(h.tally.map((t) => [name(t.id), t.votes])),
+          },
+          chosen
+            ? { kind: h.day === 0 ? "mayor" : "out", who: chosen.name, reveal: h.day === 0 ? undefined : (chosen.label ?? undefined) }
+            : { kind: "text", text: h.day === 0 ? "시장 없음" : "추방 없음" },
+        ],
+      };
+    }
+    const steps: Step[] = h.acts
+      .filter((a) => a.mode !== "rest")
+      .flatMap((a) => {
+        const doing = a.mode === "kill" ? "살해" : a.mode === "ability" ? ROLES[a.role].action : a.mode === "armor" ? "갑옷" : "폭파";
+        const go = (role: string | null, to: string | null, title: string): Step => ({
+          kind: "go",
+          by: name(a.by),
+          role,
+          to: to && name(to),
+          off: a.stopped !== null,
+          fake: a.fake,
+          title,
+        });
+        const role = a.mode === "kill" ? null : a.mode === "armor" ? "survivor" : a.mode === "detonate" ? "bomber" : a.role;
+        // 혼자 남은 임포스터는 살해와 능력을 함께 쓴다
+        return [go(role, a.target, doing), ...(a.mode === "kill" && a.extra ? [go(a.role, a.extra, ROLES[a.role].action)] : [])];
+      });
+    for (const x of h.hits) steps.push({ kind: "hit", by: name(x.by), to: name(x.victim), died: x.died, title: `${name(x.by)}의 ${HIT[x.kind]}` });
+    return { night: true, label: `${h.day}일차 밤`, steps: steps.length ? steps : [{ kind: "text", text: "조용했다" }] };
+  });
+  return <Timeline periods={periods} colors={colors} />;
 }
 
 function Countdown({ due }: { due: number }) {
@@ -732,20 +1497,29 @@ function Countdown({ due }: { due: number }) {
   }, []);
   const left = Math.max(0, Math.ceil((due - now) / 1000));
   return (
-    <span className={`tabular-nums ${left <= 10 ? "text-[var(--blood)]" : ""}`}>
+    <span className="tabular-nums" style={{ color: left <= 10 ? "var(--blood)" : undefined }}>
       {Math.floor(left / 60)}:{String(left % 60).padStart(2, "0")}
     </span>
   );
 }
 
-type ChatProps = { view: View; send: (m: object) => void; colors?: Record<string, string>; hud?: boolean };
+type ChatProps = { view: View; send: (m: object) => void; colors: Record<string, string>; hud?: boolean };
 
-// hud: 마을 위에 얹는 모양 (말풍선이 풀밭 위에 쌓인다)
-function Chat({ view, send, colors = {}, hud = false }: ChatProps) {
+// hud: 마을 위에 얹는 모양. 사람이 한 말만 풀밭 위에 쌓이고, 알림 줄은 Tab 창에 있다.
+function Chat({ view, send, colors, hud = false }: ChatProps) {
   const list = useRef<HTMLOListElement>(null);
+  const [wide, setWide] = useState(false); // 입력칸에 들어가 있는 동안 지난 대화를 펼친다
+  const told = useRef(0); // 입력 중이라고 마지막으로 알린 때 (0이면 알리지 않은 상태)
+  // 글자가 있는 동안 3초마다 입력 중임을 알리고, 비우거나 보내거나 나가면 끈다. 내 머리 위 점은 바로 띄운다.
+  const tell = (on: boolean) => {
+    if (on ? Date.now() - told.current < 3000 : !told.current) return;
+    told.current = on ? Date.now() : 0;
+    typing(view.me.id, on);
+    send({ t: "typing", on });
+  };
   useEffect(() => {
     if (list.current) list.current.scrollTop = list.current.scrollHeight;
-  }, [view.chat.length]);
+  }, [view.chat.length, wide]);
 
   const { me, phase } = view;
   const playing = phase === "night" || phase === "day";
@@ -753,53 +1527,75 @@ function Chat({ view, send, colors = {}, hud = false }: ChatProps) {
   const blocked = phase === "night" && me.alive && me.team !== "imposter";
   const willing = dead && me.will && phase === "day";
   const hint = blocked
-    ? "밤에는 말할 수 없어요"
+    ? "밤에는 말 못 한다"
     : willing
-      ? "유언 한마디 (모두에게 보이고, 한 번뿐)"
+      ? "유언 한마디 (한 번뿐)"
       : dead
-        ? "죽은 사람끼리만 보여요"
+        ? "죽은 사람끼리"
         : phase === "night"
           ? me.both
-            ? "혼자 남았어요. 죽은 동료만 봅니다"
-            : "임포스터끼리만 보여요"
-          : "할 말을 적으세요";
+            ? "죽은 동료만 본다"
+            : "임포스터끼리"
+          : "Enter로 말하기";
+  const brief = hud && !wide;
 
   return (
-    <section className={hud ? "hud-glass p-2" : ""}>
-      {!hud && <h2 className="hud-display mb-1 text-sm">대화와 기록</h2>}
+    <section className={hud && wide ? "chat-wide" : undefined}>
       <ol
+        key={brief ? view.chat.length : "all"}
         ref={list}
         aria-live="polite"
-        className={`flex flex-col items-start gap-1 overflow-y-auto text-sm ${hud ? "max-h-44" : "hud-glass h-64 p-2"}`}
+        onMouseDown={(e) => hud && e.preventDefault() /* 눌러도 입력칸에서 안 나가게 */}
+        className={`flex flex-col items-start gap-1.5 ${brief ? "chat-brief" : hud ? "max-h-[50vh] overflow-y-auto" : "max-h-64 overflow-y-auto"}`}
       >
-        {view.chat.map((c, i) =>
-          c.name === "" ? (
-            <li key={i} className="hud-shadow w-full px-1 text-xs leading-5">
-              {c.text}
-            </li>
-          ) : (
-            <li key={i} className="hud-chip max-w-full break-words">
-              <span aria-hidden className="mr-1.5 inline-block h-2.5 w-2.5 rounded-full border border-[var(--ink)]" style={{ background: colors[c.name] ?? "#8b8d98" }} />
-              <b className="hud-display mr-1.5 font-normal">{c.name}</b>
-              {c.to !== "all" && <span className="mr-1.5 text-xs opacity-70">{c.to === "dead" ? "저승에서" : "임포스터끼리"}</span>}
-              {c.text}
-            </li>
-          ),
-        )}
+        {view.chat
+          .filter((c) => !brief || c.name !== "")
+          .slice(brief ? -1 : 0) // 접혀 있을 때는 방금 온 한 줄만
+          .map((c, i) =>
+            c.name === "" ? (
+              <li key={i} className="text-sm opacity-70">
+                {c.text}
+              </li>
+            ) : (
+              <li key={i} className={hud ? "say quiet" : "say"} style={hud ? undefined : { background: `color-mix(in srgb, ${colors[c.name] ?? "#8b8d98"} 38%, #fff7e6)` }}>
+                <i aria-hidden style={{ background: colors[c.name] ?? "#8b8d98" }} />
+                <span>
+                  <b className="d mr-1.5 font-normal" style={hud ? { color: `color-mix(in srgb, ${colors[c.name] ?? "#8b8d98"} 55%, #fff)` } : undefined}>{c.name} </b>
+                  {c.to !== "all" && <span className="mr-1.5 text-xs opacity-70">{c.to === "dead" ? "저승" : "임포스터"}</span>}
+                  {c.text}
+                </span>
+              </li>
+            ),
+          )}
       </ol>
       <form
-        className="mt-2 flex gap-2"
+        className="mt-2"
         onSubmit={(e) => {
           e.preventDefault();
           const input = e.currentTarget.elements.namedItem("text") as HTMLInputElement;
-          if (input.value.trim()) send({ t: "chat", text: input.value });
+          if (!input.value.trim()) input.blur(); // 빈 채로 Enter면 접는다
+          else if (!blocked) send({ t: "chat", text: input.value });
+          tell(false);
           input.value = "";
+          if (hud) input.blur(); // 보내면 접는다
         }}
       >
-        <input name="text" aria-label="메시지" maxLength={200} disabled={blocked} placeholder={hint} autoComplete="off" className="hud-field min-w-0 flex-1 text-sm" />
-        <button className={willing ? btn : subBtn} disabled={blocked}>
-          {willing ? "유언 남기기" : "보내기"}
-        </button>
+        <input
+          id={hud ? "chat-in" : undefined}
+          name="text"
+          aria-label="메시지"
+          maxLength={200}
+          readOnly={blocked}
+          onFocus={() => setWide(true)}
+          onBlur={() => {
+            setWide(false);
+            tell(false);
+          }}
+          onInput={(e) => !blocked && tell(e.currentTarget.value.trim() !== "")}
+          placeholder={hint}
+          autoComplete="off"
+          className={hud ? "chat-in" : "field w-full"}
+        />
       </form>
     </section>
   );

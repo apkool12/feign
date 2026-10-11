@@ -1,12 +1,16 @@
 @import "tailwindcss";
 
-/* 마을과 같은 색조를 쓴다: 먹색 외곽선, 양피지색 면, 풀빛 유리 */
+/* 마을 위에 얹는 종이 딱지 HUD. 먹색 외곽선, 종이 면, 눌리는 그림자. */
 :root {
   --ink: #2b2118;
-  --parchment: #f4ecd2;
-  --moss: 40 58 28;
-  --sun: #ffd23f;
+  --paper: #f6ecd0;
+  --paper2: #ead9ae;
+  --sun: #ffc93c;
+  --sun2: #f2a516;
   --blood: #d9443a;
+  --leaf: #4fa54a;
+  --sky: #3d8fd6;
+  --moon: #dfe5ff;
 }
 
 @theme inline {
@@ -14,157 +18,951 @@
 }
 
 body {
-  background: #1d2a16;
-  color: var(--parchment);
+  background: #74b848;
+  color: var(--ink);
   font-family: var(--font-body), system-ui, sans-serif;
+  font-weight: 600;
 }
 
-.hud-display {
+.d {
   font-family: var(--font-display), system-ui, sans-serif;
   font-weight: 400;
 }
 
-/* 마을이 비쳐 보이는 띠 */
-.hud-glass {
-  background: rgb(var(--moss) / 0.62);
-  border-radius: 14px;
-  backdrop-filter: blur(3px);
+:where(button, input, select, summary):focus-visible {
+  outline: 3px solid var(--sun);
+  outline-offset: 2px;
+}
+button:disabled {
+  cursor: default;
 }
 
-/* 역할을 한 글자로 새긴 패 */
-.hud-tile {
-  display: grid;
-  place-items: center;
-  width: 2rem;
-  height: 2rem;
-  background: var(--parchment);
+/* 종이 면 */
+.paper {
+  background-color: var(--paper);
+  background-image:
+    radial-gradient(rgb(122 90 40 / 0.07) 1px, transparent 1.4px), radial-gradient(rgb(255 255 255 / 0.35) 1px, transparent 1.4px);
+  background-size:
+    7px 7px,
+    11px 11px;
+  background-position:
+    0 0,
+    3px 5px;
   color: var(--ink);
-  border: 2px solid var(--ink);
-  border-radius: 7px;
-  box-shadow: 0 2px 0 var(--ink);
-  font-family: var(--font-display), system-ui, sans-serif;
-  font-size: 1.05rem;
-  line-height: 1;
+  border: 3px solid var(--ink);
+  border-radius: 20px 24px 22px 26px / 24px 20px 26px 22px;
+  box-shadow: 0 5px 0 var(--ink);
 }
 
-/* 그림이 든 패는 그림 자체에 테두리가 있으므로 패의 테두리를 걷는다 */
-.hud-tile-img {
-  width: 2.25rem;
-  height: 2.25rem;
-  background: none;
-  border: 0;
-  box-shadow: none;
+/* 풀밭 위에 바로 쓰는 흰 글자 */
+.out {
+  font-family: var(--font-display), system-ui, sans-serif;
+  color: #fff;
+  text-shadow:
+    -2px 0 var(--ink),
+    2px 0 var(--ink),
+    0 -2px var(--ink),
+    0 3px var(--ink),
+    -2px -2px var(--ink),
+    2px -2px var(--ink),
+    -2px 2px var(--ink),
+    2px 3px var(--ink);
 }
 
-/* 눌리는 느낌의 버튼 */
-.hud-btn {
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
   font-family: var(--font-display), system-ui, sans-serif;
-  background: var(--parchment);
+  font-size: 20px;
   color: var(--ink);
-  border: 2.5px solid var(--ink);
-  border-radius: 12px;
-  padding: 0.4rem 0.9rem;
-  box-shadow: 0 4px 0 var(--ink);
+  background: var(--paper);
+  border: 3px solid var(--ink);
+  border-radius: 14px 16px 15px 18px;
+  padding: 6px 20px;
+  box-shadow: 0 5px 0 var(--ink);
+  white-space: nowrap;
   transition:
     transform 0.06s,
     box-shadow 0.06s;
 }
-.hud-btn:hover:not(:disabled) {
-  filter: brightness(1.06);
+.btn.go {
+  background: linear-gradient(var(--sun), var(--sun2));
 }
-.hud-btn:active:not(:disabled),
-.hud-btn[aria-pressed="true"] {
+.btn.big {
+  font-size: 30px;
+  padding: 10px 44px;
+  border-width: 4px;
+  box-shadow: 0 7px 0 var(--ink);
+  border-radius: 20px 22px 21px 24px;
+}
+.btn:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+.btn:active:not(:disabled),
+.btn[aria-pressed="true"] {
+  transform: translateY(4px);
+  box-shadow: 0 1px 0 var(--ink);
+}
+.btn[aria-pressed="true"] {
+  background: var(--sun);
+}
+.btn:disabled {
+  opacity: 0.45;
+}
+
+.field {
+  font: 700 18px var(--font-body), system-ui, sans-serif;
+  color: var(--ink);
+  background: #fffaf0;
+  border: 3px solid var(--ink);
+  border-radius: 13px;
+  padding: 9px 14px;
+  box-shadow: inset 0 3px 0 rgb(43 33 24 / 0.12);
+}
+
+/* 역할 그림 패 */
+.tile {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 46px;
+  height: 46px;
+  background: var(--paper);
+  border: 2.5px solid var(--ink);
+  border-radius: 13px 15px 14px 16px;
+  box-shadow: 0 3px 0 var(--ink);
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-size: 20px;
+  overflow: hidden;
+}
+.tile img {
+  width: 88%;
+  height: 88%;
+  object-fit: contain;
+}
+.tile.lg {
+  width: 76px;
+  height: 76px;
+  border-width: 3px;
+  border-radius: 20px 22px 21px 24px;
+  box-shadow: 0 5px 0 var(--ink);
+}
+.tile.xl {
+  width: 176px;
+  height: 176px;
+  border-width: 4px;
+  border-radius: 38px 44px 40px 46px;
+  box-shadow: 0 8px 0 var(--ink);
+}
+.tile.off {
+  opacity: 0.35;
+  filter: grayscale(1);
+}
+
+/* 그림만 있는 버튼 */
+.ib {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  background: var(--paper);
+  border: 3px solid var(--ink);
+  border-radius: 14px 16px 15px 17px;
+  box-shadow: 0 4px 0 var(--ink);
+}
+.ib:active {
   transform: translateY(3px);
   box-shadow: 0 1px 0 var(--ink);
 }
-.hud-btn-go,
-.hud-btn[aria-pressed="true"] {
-  background: var(--sun);
-}
-.hud-btn-danger[aria-pressed="true"] {
-  background: var(--blood);
-  color: #fff;
-}
-.hud-btn:disabled {
-  opacity: 0.5;
-}
-.hud-btn:focus-visible,
-.hud-field:focus-visible {
-  outline: 3px solid var(--sun);
-  outline-offset: 2px;
+.ib svg {
+  width: 26px;
+  height: 26px;
+  stroke: var(--ink);
+  stroke-width: 2.6;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-.hud-field {
-  background: var(--parchment);
-  color: var(--ink);
-  border: 2.5px solid var(--ink);
-  border-radius: 12px;
-  padding: 0.4rem 0.7rem;
+.clock {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 22px 8px 14px;
+  margin-top: -4px;
+  border-radius: 0 0 22px 26px / 0 0 26px 22px;
 }
-.hud-field::placeholder {
-  color: rgb(43 33 24 / 0.55);
+.clock .t {
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-size: 38px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
 }
-.hud-field:disabled {
-  opacity: 0.6;
+.clock small {
+  display: block;
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0.65;
 }
-
-/* 말풍선 */
-.hud-chip {
-  background: rgb(244 236 210 / 0.92);
-  color: var(--ink);
-  border-radius: 10px;
-  padding: 0.2rem 0.55rem;
-}
-
-/* 밤이 지나거나 투표가 끝났을 때 내려왔다가 사라지는 팻말 */
-.hud-sign {
-  background: var(--parchment);
-  color: var(--ink);
+.sun,
+.moon {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
   border: 3px solid var(--ink);
-  border-radius: 14px;
-  box-shadow: 0 5px 0 var(--ink);
-  animation:
-    sign-in 0.35s ease-out,
-    sign-out 0.5s ease-in 10s forwards;
 }
-@keyframes sign-in {
+.sun {
+  background: var(--sun);
+  box-shadow: inset -6px -5px 0 var(--sun2);
+}
+.moon {
+  background: var(--moon);
+  box-shadow: inset -11px -3px 0 #8f9bd6;
+}
+
+/* 소식 한 줄. 내려왔다가 사라진다. */
+.toast {
+  padding: 6px 18px;
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-size: 20px;
+  text-align: center;
+  box-shadow: 0 3px 0 var(--ink);
+  animation:
+    toast-in 0.35s ease-out,
+    toast-out 0.5s ease-in 9s forwards;
+}
+@keyframes toast-in {
   from {
     transform: translateY(-140%);
   }
 }
-@keyframes sign-out {
+@keyframes toast-out {
   to {
     opacity: 0;
     visibility: hidden;
   }
 }
 
-.hud-sun,
-.hud-moon {
-  display: inline-block;
-  width: 1.5rem;
-  height: 1.5rem;
-  border-radius: 50%;
-}
-.hud-sun {
-  background: var(--sun);
-  border: 2.5px solid var(--ink);
-}
-.hud-moon {
-  box-shadow: inset -0.5rem -0.1rem 0 0 #e8ecff;
+.chip {
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-size: 16px;
+  color: var(--paper);
+  background: rgb(43 33 24 / 0.7);
+  border-radius: 12px;
+  padding: 6px 14px;
 }
 
-.hud-shadow {
+/* 대화 */
+.say {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  font-size: 15px;
+  line-height: 1.3;
+  padding: 4px 12px 4px 5px;
+  border: 2.5px solid var(--ink);
+  border-radius: 14px;
+  overflow-wrap: anywhere;
+}
+.say i {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50% 50% 46% 46%;
+  border: 2.5px solid var(--ink);
+}
+.chat-in {
+  width: 260px;
+  max-width: 100%;
+  font-size: 14px;
+  color: var(--paper);
+  background: rgb(43 33 24 / 0.6);
+  border-radius: 12px;
+  padding: 9px 14px;
+  min-height: 44px;
+}
+.chat-in:focus-visible {
+  outline: none;
+  background: rgb(43 33 24 / 0.85);
+}
+/* HUD 위의 말은 마을을 가리지 않게 조용하게 */
+.say.quiet {
+  font-size: 14px;
+  color: var(--paper);
+  background: rgb(43 33 24 / 0.55);
+  border: 0;
+  border-radius: 10px;
+  padding: 3px 10px 3px 6px;
+}
+.say.quiet i {
+  width: 12px;
+  height: 12px;
+  border-width: 0;
+  border-radius: 50%;
+}
+/* 접힌 채팅: 새 말이 오면 잠깐 보였다가 스르르 사라진다 */
+.chat-brief {
+  animation: chat-fade 7s forwards;
+  pointer-events: none;
+}
+@keyframes chat-fade {
+  0%,
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+.chat-wide {
+  background: rgb(43 33 24 / 0.55);
+  border-radius: 16px;
+  padding: 10px;
+  width: min(420px, 90vw);
+}
+.chat-wide .chat-in {
+  width: 100%;
+}
+.chat-in::placeholder {
+  color: rgb(246 236 208 / 0.8);
+}
+
+/* 밤 행동 */
+.round {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  font-size: 17px;
+}
+.round span.o {
+  display: grid;
+  place-items: center;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  border: 4px solid var(--ink);
+  background: var(--paper);
+  box-shadow: 0 6px 0 var(--ink);
+}
+.round img {
+  width: 62px;
+  height: 62px;
+  object-fit: contain;
+}
+.round[aria-pressed="true"] span.o {
+  background: var(--sun);
+  transform: translateY(4px);
+  box-shadow:
+    0 2px 0 var(--ink),
+    0 0 0 6px rgb(255 201 60 / 0.45);
+}
+
+.tag {
+  display: inline-block;
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-size: 15px;
+  color: #fff;
+  padding: 2px 12px 3px;
+  border: 2.5px solid var(--ink);
+  border-radius: 999px;
+  box-shadow: 0 2px 0 var(--ink);
+  white-space: nowrap;
+}
+.tag.innocent {
+  background: var(--leaf);
+}
+.tag.imposter {
+  background: var(--blood);
+}
+.tag.neutral {
+  background: var(--sky);
+}
+
+/* 가운데 뜨는 창 */
+dialog.sheet {
+  margin: auto;
+  padding: 26px 30px;
+  max-width: calc(100vw - 48px);
+  overflow: visible;
+}
+dialog.sheet::backdrop {
+  background: rgb(20 16 10 / 0.62);
+}
+.sheet .body {
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
+  /* 스크롤 상자가 안쪽 단추의 테두리·그림자를 자르지 않게 여유를 둔다 */
+  padding: 10px;
+  margin: -10px;
+}
+.sheet .x {
+  position: absolute;
+  right: -16px;
+  top: -16px;
+}
+.sheet h3 {
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-weight: 400;
+  font-size: 17px;
+  opacity: 0.6;
+  margin-bottom: 8px;
+}
+.hr {
+  border-top: 2.5px dashed rgb(43 33 24 / 0.3);
+  margin: 18px 0;
+}
+.tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.tabs button {
+  min-height: 44px;
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-size: 20px;
+  padding: 4px 20px;
+  border: 3px solid var(--ink);
+  border-radius: 13px;
+  background: var(--paper2);
+}
+.tabs button[aria-selected="true"] {
+  background: var(--sun);
+  box-shadow: 0 4px 0 var(--ink);
+  transform: translateY(-2px);
+}
+.opt {
+  display: grid;
+  place-items: center;
+  width: 138px;
+  height: 138px;
+  border: 3px solid var(--ink);
+  border-radius: 18px 20px 19px 22px;
+  background: #cfe3c0; /* 흰 캐릭터도 묻히지 않는 옅은 풀빛 */
+  overflow: hidden;
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-size: 20px;
+}
+.opt img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.opt[aria-pressed="true"] {
+  box-shadow:
+    0 0 0 5px var(--sun),
+    0 5px 0 5px var(--ink);
+}
+.pl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 6px;
+  font-size: 15px;
+  font-weight: 800;
+}
+.pl + .pl {
+  border-top: 2px dashed rgb(43 33 24 / 0.18);
+}
+.pl.dead > b {
+  text-decoration: line-through;
+  opacity: 0.5;
+}
+
+/* 역할 공개와 결과: 흐려진 마을 위로 번지는 색 */
+.wash {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 36% 44% at 26% 22%, var(--w1) 0, transparent 70%),
+    radial-gradient(ellipse 43% 52% at 78% 30%, var(--w2) 0, transparent 70%),
+    radial-gradient(ellipse 53% 52% at 50% 96%, var(--w1) 0, transparent 72%), rgb(28 22 14 / 0.78);
+  backdrop-filter: blur(6px);
+}
+.bit {
+  position: absolute;
+  width: 14px;
+  height: 22px;
+  border: 2.5px solid var(--ink);
+  border-radius: 4px;
+}
+.title {
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-size: clamp(48px, 7vw, 96px);
+  line-height: 1;
+  color: #fff;
+  text-align: center;
   text-shadow:
-    0 1px 0 var(--ink),
-    0 0 6px rgb(0 0 0 / 0.6);
+    -4px 0 var(--ink),
+    4px 0 var(--ink),
+    0 -4px var(--ink),
+    0 8px var(--ink),
+    -4px -4px var(--ink),
+    4px -4px var(--ink),
+    -4px 6px var(--ink),
+    4px 8px var(--ink);
+}
+.pc {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 168px;
+  padding: 16px 10px 14px;
+  text-align: center;
+}
+.pc > i {
+  position: relative;
+  width: 70px;
+  height: 74px;
+  border-radius: 50% 50% 46% 46%;
+  border: 3.5px solid var(--ink);
+}
+.pc > i::after {
+  content: "";
+  position: absolute;
+  left: 19px;
+  top: 27px;
+  width: 7px;
+  height: 10px;
+  border-radius: 4px;
+  background: var(--ink);
+  box-shadow: 22px 0 0 var(--ink);
+}
+.pc b {
+  max-width: 100%;
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-weight: 400;
+  font-size: 19px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pc.lose {
+  filter: saturate(0.4) brightness(0.86);
+  transform: translateY(16px) scale(0.94);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .hud-btn {
+  .btn {
     transition: none;
   }
-  .hud-sign {
-    animation: sign-out 0.01s 10s forwards;
+  .toast {
+    animation: toast-out 0.01s 9s forwards;
   }
+}
+
+/* 설정 창 */
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+}
+.gl {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+}
+.gl svg {
+  width: 22px;
+  height: 22px;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.vol {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  background: transparent;
+  cursor: pointer;
+}
+.vol::-webkit-slider-runnable-track {
+  height: 18px;
+  border: 3px solid var(--ink);
+  border-radius: 10px 12px 11px 13px;
+  background: linear-gradient(to right, var(--sun) var(--v), var(--paper2) var(--v));
+  box-shadow: 0 3px 0 var(--ink);
+}
+.vol::-moz-range-track {
+  height: 12px;
+  border: 3px solid var(--ink);
+  border-radius: 10px;
+  background: linear-gradient(to right, var(--sun) var(--v), var(--paper2) var(--v));
+  box-shadow: 0 3px 0 var(--ink);
+}
+.vol::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 30px;
+  height: 30px;
+  margin-top: -9px;
+  border-radius: 50%;
+  background: var(--paper);
+  border: 3px solid var(--ink);
+  box-shadow: 0 3px 0 var(--ink);
+}
+.vol::-moz-range-thumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--paper);
+  border: 3px solid var(--ink);
+  box-shadow: 0 3px 0 var(--ink);
+}
+.sw {
+  position: relative;
+  flex: none;
+  width: 66px;
+  height: 38px;
+  border: 3px solid var(--ink);
+  border-radius: 999px;
+  background: var(--paper2);
+  box-shadow: 0 3px 0 var(--ink);
+}
+.sw::before {
+  content: "";
+  position: absolute;
+  inset: -6px; /* 누름 영역 44px 이상 */
+}
+.sw::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 3px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--paper);
+  border: 3px solid var(--ink);
+  transition: transform 0.15s ease-out;
+}
+.sw[aria-checked="true"] {
+  background: var(--sun);
+}
+.sw[aria-checked="true"]::after {
+  transform: translateX(28px);
+}
+.keys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+}
+.keys li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.keys kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 30px;
+  height: 30px;
+  padding: 0 7px;
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-size: 14px;
+  background: var(--paper);
+  border: 2.5px solid var(--ink);
+  border-radius: 8px;
+  box-shadow: 0 3px 0 var(--ink);
+}
+.keys em {
+  font-style: normal;
+  font-size: 13px;
+  margin-left: 4px;
+}
+.mouse {
+  position: relative;
+  width: 22px;
+  height: 32px;
+  background: var(--paper);
+  border: 2.5px solid var(--ink);
+  border-radius: 11px;
+  overflow: hidden;
+}
+.mouse::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  width: 50%;
+  height: 44%;
+  background: var(--sun);
+  border-bottom: 2.5px solid var(--ink);
+}
+.mouse.l::before {
+  left: 0;
+  border-right: 2.5px solid var(--ink);
+}
+.mouse.r::before {
+  right: 0;
+  border-left: 2.5px solid var(--ink);
+}
+
+/* 지난 일: 밤과 낮의 칸 */
+.tile.sm {
+  width: 30px;
+  height: 30px;
+  border-width: 2px;
+  border-radius: 9px;
+  box-shadow: 0 2px 0 var(--ink);
+  font-size: 14px;
+  color: var(--ink);
+}
+.per {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  background: rgb(255 255 255 / 0.5);
+  border: 2.5px solid var(--ink);
+  border-radius: 16px 18px 17px 19px;
+}
+.per.night {
+  background: #2c3160;
+  color: var(--paper);
+}
+.per .when {
+  flex: none;
+  width: 62px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-size: 13px;
+  text-align: center;
+}
+.per .sun,
+.per .moon {
+  width: 28px;
+  height: 28px;
+  border-width: 2.5px;
+}
+.per .moon {
+  box-shadow: inset -8px -2px 0 #8f9bd6;
+}
+.per > ol {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.per > ol > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  font-size: 14px;
+}
+.per li.off {
+  opacity: 0.45;
+}
+.face {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 14px;
+  font-weight: 800;
+}
+.face i {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50% 50% 46% 46%;
+  border: 2.5px solid var(--ink);
+}
+.heads {
+  display: inline-flex;
+}
+.heads .face + .face {
+  margin-left: -7px;
+}
+.cnt {
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 7px;
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--ink);
+  background: var(--sun);
+  border: 2px solid var(--ink);
+  border-radius: 999px;
+}
+.memo {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+}
+.memo li {
+  padding: 6px 10px;
+  background: rgb(255 255 255 / 0.5);
+  border-left: 5px solid var(--sun2);
+  border-radius: 4px 10px 10px 4px;
+}
+
+/* 메인 메뉴. 뒤에 마을이 돌고, 살짝 눌러서 로고와 단추가 읽히게 한다 */
+.menu {
+  position: relative;
+  flex: 1;
+  min-height: 100vh;
+  overflow: hidden;
+  word-break: keep-all;
+  user-select: none;
+}
+.menu .bg,
+.menu .veil {
+  position: absolute;
+  inset: 0;
+}
+.menu .veil {
+  pointer-events: none;
+  backdrop-filter: blur(2.5px);
+  background: rgb(24 34 16 / 0.2);
+}
+.menu .left {
+  position: absolute;
+  left: clamp(24px, 5vw, 80px);
+  top: clamp(16px, 7vh, 80px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 18px;
+}
+.menu .logo {
+  width: clamp(300px, 34vw, 520px);
+  height: auto;
+  margin-bottom: clamp(4px, 5vh, 56px);
+  filter: drop-shadow(0 6px 0 rgb(43 33 24 / 0.3));
+}
+.menu .left .btn.big {
+  min-width: clamp(260px, 23vw, 340px);
+  justify-content: flex-start;
+}
+.menu .right {
+  position: absolute;
+  right: clamp(24px, 7vw, 140px);
+  bottom: clamp(28px, 9vh, 100px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.menu .me {
+  width: clamp(260px, 26vw, 400px);
+  height: clamp(280px, 50vh, 470px);
+  pointer-events: none;
+}
+.menu .gear {
+  position: absolute;
+  right: 16px;
+  top: 14px;
+}
+.menu .ver {
+  position: absolute;
+  left: 20px;
+  bottom: 12px;
+  color: #fff;
+  opacity: 0.8;
+}
+/* 방 코드 네 칸. 진짜 입력칸은 투명하게 위에 덮여 있다 */
+.code {
+  position: relative;
+  display: flex;
+  gap: 10px;
+}
+.code input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+}
+.code b {
+  display: grid;
+  place-items: center;
+  width: 66px;
+  height: 78px;
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-size: 44px;
+  font-weight: 400;
+  background: #fffaf0;
+  border: 3px solid var(--ink);
+  border-radius: 14px 16px 15px 18px;
+  box-shadow: inset 0 4px 0 rgb(43 33 24 / 0.12);
+}
+.code:focus-within b[data-on="true"] {
+  outline: 3px solid var(--sun);
+  outline-offset: 2px;
+}
+.how {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 22px;
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-size: 20px;
+  text-align: center;
+  text-wrap: balance;
+}
+.how div {
+  display: grid;
+  place-items: center;
+  height: 140px;
+  margin-bottom: 12px;
+  border: 3px solid var(--ink);
+  border-radius: 18px 20px 19px 22px;
+  background: #f4e4b8;
+}
+.how div[data-n="0"] {
+  background: #2a3063;
+}
+.how div[data-n="1"] {
+  background: #bfe4a4;
+}
+.how div[data-n="2"] {
+  background: #e9cba4;
+}
+.how .sun,
+.how .moon {
+  width: 64px;
+  height: 64px;
+}
+.how .gl {
+  width: 64px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  border: 3px solid var(--ink);
+  border-radius: 50%;
+  background: var(--sun);
+  box-shadow: 0 4px 0 var(--ink);
+}
+@media (max-width: 900px) {
+  .how {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+.how .gl svg {
+  width: 34px;
+  height: 34px;
+  stroke: var(--ink);
+  stroke-width: 3.4;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
