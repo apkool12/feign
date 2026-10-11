@@ -11,7 +11,7 @@ const CALM = typeof window !== "undefined" && window.matchMedia("(prefers-reduce
 type Look = { skin: string; hat: string; color: string };
 
 // pose가 있으면 돌지 않고 그 동작을 한다 (결과 화면)
-function Figure({ skin, hat, color, pose }: Look & { pose?: string }) {
+function Figure({ skin, hat, color, pose, face = pose === "cheer" ? "happy" : "default" }: Look & { pose?: string; face?: string }) {
   const turn = useRef<THREE.Group>(null);
   const clip = useRef(pose ?? "idle");
   useFrame((state) => {
@@ -26,9 +26,9 @@ function Figure({ skin, hat, color, pose }: Look & { pose?: string }) {
     <group ref={turn} position={[0, pose ? 0 : -0.6, 0]}>
       <Suspense fallback={null}>
         {skin === "blob" ? (
-          <Model file="character-2" clip={clip} face={pose === "cheer" ? "happy" : "default"} overhead={top} paint={(name, m) => name === "Body" && m.color.set(color)} />
+          <Model file="character-2" clip={clip} face={face} overhead={top} paint={(name, m) => name === "Body" && m.color.set(color)} />
         ) : (
-          <Model file={`skins/${skin}`} clip={clip} face={pose === "cheer" ? "happy" : "default"} overhead={top} />
+          <Model file={`skins/${skin}`} clip={clip} face={face} overhead={top} />
         )}
       </Suspense>
     </group>
@@ -69,6 +69,34 @@ export function Lineup({ people }: { people: (Look & { won: boolean })[] }) {
         <directionalLight position={[3, 5, 4]} intensity={1.8} />
         <Spots people={people} />
       </Canvas>
+    </div>
+  );
+}
+
+// 밀고자의 지목: 화면을 가로지르는 컷인 두 장. 먼저 밀고자가 팔을 들고 느낌표가 찍히고, 이어서 지목당한 사람의 당황한 얼굴이 나온다.
+function Shot({ who, pose, face }: { who: Look; pose: string; face?: string }) {
+  return (
+    <Canvas dpr={[1, 2]} camera={{ fov: 30, position: [0, 0.62, 2.3] }} gl={{ alpha: true }}>
+      <ambientLight intensity={1.7} />
+      <directionalLight position={[3, 5, 4]} intensity={1.8} />
+      <Figure {...who} pose={pose} face={face} />
+    </Canvas>
+  );
+}
+export function CutIn({ by, who }: { by: Look; who: Look }) {
+  return (
+    <div className="cutin" aria-hidden>
+      <div className="cut a" style={{ "--c": by.color } as React.CSSProperties}>
+        <div className="fig">
+          <Shot who={by} pose="vote" />
+        </div>
+        <b className="bang">!</b>
+      </div>
+      <div className="cut b" style={{ "--c": who.color } as React.CSSProperties}>
+        <div className="fig">
+          <Shot who={who} pose="startle" face="scared" />
+        </div>
+      </div>
     </div>
   );
 }

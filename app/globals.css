@@ -1078,3 +1078,73 @@ canvas {
 
 
 
+
+/* 밀고자 지목 컷인: 화면을 가로지르는 두 장이 차례로 들어왔다 나간다 */
+.cutin {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  overflow: hidden;
+}
+.cut {
+  position: absolute;
+  left: -4vw;
+  right: -4vw;
+  top: 30vh;
+  height: 38vh;
+  background: var(--c);
+  border-block: 7px solid var(--ink);
+  box-shadow: 0 14px 0 rgb(0 0 0 / 0.25);
+  transform: translateX(-110%) skewY(-4deg);
+  animation: cut-a 1.35s cubic-bezier(0.2, 0.9, 0.2, 1) both;
+}
+.cut.b {
+  transform: translateX(110%) skewY(4deg);
+  animation: cut-b 1.5s 1.3s cubic-bezier(0.2, 0.9, 0.2, 1) both;
+}
+.cut .fig {
+  position: absolute;
+  left: 22%;
+  top: -18%;
+  width: 46vh;
+  height: 136%;
+  transform: skewY(4deg);
+}
+.cut.b .fig {
+  left: auto;
+  right: 22%;
+  transform: skewY(-4deg);
+}
+.cut .bang {
+  position: absolute;
+  right: 24%;
+  top: 50%;
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-weight: 400;
+  font-size: 44vh;
+  line-height: 0;
+  color: var(--sun);
+  -webkit-text-stroke: 14px var(--ink);
+  paint-order: stroke fill;
+  animation: bang 0.28s 0.3s cubic-bezier(0.3, 1.6, 0.5, 1) both;
+}
+@keyframes cut-a {
+  0% { transform: translateX(-110%) skewY(-4deg); }
+  14%, 86% { transform: translateX(0) skewY(-4deg); }
+  100% { transform: translateX(110%) skewY(-4deg); }
+}
+@keyframes cut-b {
+  0% { transform: translateX(110%) skewY(4deg); }
+  12%, 88% { transform: translateX(0) skewY(4deg); }
+  100% { transform: translateX(-110%) skewY(4deg); }
+}
+@keyframes bang {
+  from { transform: scale(3.4) rotate(-20deg); opacity: 0; }
+  to { transform: scale(1) rotate(10deg); opacity: 1; }
+}
+
+/* 켜 둔 동그란 단추 (마이크) */
+.ib[aria-pressed="true"] {
+  background: var(--sun);
+}

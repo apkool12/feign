@@ -14,7 +14,10 @@ import { AbilityEffect, Burst, RoleIcon, Shield, Trap, useShake } from "./Effect
 import { play, SFX, type Sfx } from "./sound";
 import { lean, stage, type Call, type Exile, type Flash } from "./stage";
 import { lift, type Plan } from "./Terrain";
+import dynamic from "next/dynamic";
 import { Body, Model, type Seat } from "./Village";
+
+const CutIn = dynamic(() => import("./Preview").then((m) => m.CutIn), { ssr: false }); // 밀고자 지목 컷인 (Preview가 Village를 불러오므로 늦게 불러온다)
 
 type V = THREE.Vector3;
 type Spot = { house: V; door: V; plaza: V; angle: number };
@@ -997,8 +1000,14 @@ export function ReplayHud({ flash, call, exile, seats, beat, calm }: { flash: Fl
     return [head(e.by), to, head(e.who), mine?.kind === "snitch" && mine.role ? tile(mine.role, mine.team, 9) : null];
   };
   const now = calm ? call.events : call.events.slice(beat, beat + 1);
+  const look = (id: string) => {
+    const i = seats.findIndex((x) => x.id === id);
+    return { skin: seats[i]?.skin ?? "blob", hat: seats[i]?.hat ?? "none", color: COLORS[Math.max(0, i) % COLORS.length] };
+  };
+  const point = !calm && now[0]?.kind === "snitch" ? now[0] : null;
   return (
     <div className="flash" aria-live="polite">
+      {point && <CutIn key={beat} by={look(point.by)} who={look(point.who)} />}
       {beat >= 0 && (
         <ul className="paper flash-sum" key={calm ? "all" : beat}>
           {call.events.length ? now.map((e, i) => <li key={i}>{told(e)}</li>) : <li>조용한 밤</li>}
