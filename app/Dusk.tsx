@@ -24,6 +24,9 @@ const now = () => performance.now() / 1000;
 const age = () => (turn.waiting ? 0 : now() - turn.at);
 const ramp = (x: number, from: number, to: number) => THREE.MathUtils.smoothstep(x, from, to);
 
+// 귀가·기상 연출이 돌고 있는가. 카메라가 캐릭터를 따라 움직이는 동안이라 집을 누르면 엉뚱한 집이 잡힌다.
+export const casting = () => turn.cast && age() < (turn.night ? DUSK : DAWN);
+
 // 사람마다 조금씩 늦게 움직인다 (다 같이 움직이면 기계 같다)
 export const late = (i: number) => (i * 0.37) % 0.45;
 

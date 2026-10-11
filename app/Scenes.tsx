@@ -804,7 +804,17 @@ export function Replay({ flash, call, exile, seats, spots, sizes, heights, doors
       if (t >= script.total) end();
       return;
     }
-    home.current ??= { pos: state.camera.position.clone(), look: orbit.target.clone() };
+    if (!home.current) {
+      home.current = { pos: state.camera.position.clone(), look: orbit.target.clone() };
+      // 장면이 끝나면 내 캐릭터는 추방 뒤에는 집 앞, 아침에는 광장에 선다. 카메라도 보던 각도 그대로 그 자리로 돌아간다.
+      const mine = spots[seats.findIndex((s) => s.isMe)];
+      if (mine) {
+        const to = exile ? mine.door : mine.plaza;
+        here.set(to.x - home.current.look.x, 0, to.z - home.current.look.z);
+        home.current.pos.add(here);
+        home.current.look.add(here);
+      }
+    }
     orbit.enabled = false;
     // 지금 장면의 자리로. 앞 장면(처음이면 원래 자리)에서 넘어온다.
     const n = script.shots.findLastIndex((shot) => t >= shot.t0);

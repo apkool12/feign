@@ -10,7 +10,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { Bubble } from "./Bubble";
 import { COLORS } from "./colors";
-import { bedtime, doorOpen, Doorway, DOORS, hinge, indoors, late, sky, tick, turn, useDark, useTurn } from "./Dusk";
+import { bedtime, casting, doorOpen, Doorway, DOORS, hinge, indoors, late, sky, tick, turn, useDark, useTurn } from "./Dusk";
 import { AbilityEffect, Bomb, Burning, Burst, Candle, RoleIcon, Shield } from "./Effects";
 import { Fire } from "./Fire";
 import { Post, Veil, toon } from "./Look";
@@ -312,12 +312,12 @@ function pickable(seat: Seat, onPick: (id: string) => void, setHover?: (on: bool
   return {
     onClick: (e: ThreeEvent<MouseEvent>) => {
       e.stopPropagation();
-      if (seat.enabled) onPick(seat.id);
+      if (seat.enabled && !casting()) onPick(seat.id);
     },
     onPointerOver: (e: ThreeEvent<PointerEvent>) => {
       e.stopPropagation();
       setHover?.(true);
-      if (seat.enabled) document.body.style.cursor = "pointer";
+      if (seat.enabled && !casting()) document.body.style.cursor = "pointer";
     },
     onPointerOut: () => {
       setHover?.(false);
