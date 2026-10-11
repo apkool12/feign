@@ -6,11 +6,11 @@ import pkg from "../package.json";
 import { COLORS } from "./colors";
 import { setFx, useFx } from "./fx";
 import { play, setVolume, useGameSound, useUiSound, volume } from "./sound";
-import { said, typing } from "./talk";
+import { emoted, isEmoteId, type EmoteId, said, typing } from "./talk";
 import { periodsOf } from "./timeline";
 import type { Period, Step } from "./timeline";
 import { ambience } from "./sound";
-import { useVoiceOn, voice } from "./voice";
+import { useVoiceOn, useVoicePrefs, voice } from "./voice";
 import { flashOf, stage, type Call, type Exile, type Flash } from "./stage";
 import type { Positions, Seat } from "./Village";
 import { DAY_CHOICES, HATS, HOUSES, INSANE, MAX_PLAYERS, MIN_PLAYERS, POOL, ROLES, SKINS, SKIP, TEAM_NAME } from "../game";
@@ -34,6 +34,7 @@ const HAT_NAME: Record<Hat, string> = { none: "없음", straw: "밀짚모자", w
 const Preview = dynamic(() => import("./Preview"), { ssr: false });
 const CutIn = dynamic(() => import("./Preview").then((m) => m.CutIn), { ssr: false });
 const Lineup = dynamic(() => import("./Preview").then((m) => m.Lineup), { ssr: false });
+const EmoteWheel = dynamic(() => import("./EmoteWheel").then((m) => m.EmoteWheel), { ssr: false });
 const Village = dynamic(() => import("./Village"), {
   ssr: false,
   loading: () => <p className="out p-4">마을 불러오는 중…</p>,
@@ -77,6 +78,169 @@ function savePrefs(p: Prefs) {
 }
 // 초대 링크(/?room=ABCD)의 방 코드
 const invited = () => (new URLSearchParams(location.search).get("room") ?? "").toUpperCase().slice(0, 4);
+
+type Point = { x: number; y: number };
+type WheelState = { open: boolean; pinned: boolean; selected: EmoteId | null; center: Point; at: number; nonce: number; touch: boolean };
+const WHEEL_IDLE: WheelState = { open: false, pinned: false, selected: null, center: { x: 0, y: 0 }, at: 0, nonce: 0, touch: false };
+const WHEEL_KEYS = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowLeft", "ArrowDown", "ArrowRight"]);
+const WHEEL_DIR = new Map<string, EmoteId>([
+  ["0,-1", 0],
+  ["1,-1", 1],
+  ["1,0", 2],
+  ["1,1", 3],
+  ["0,1", 4],
+  ["-1,1", 5],
+  ["-1,0", 6],
+  ["-1,-1", 7],
+]);
+
+function typingNow() {
+  const el = document.activeElement;
+  return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement || (el instanceof HTMLElement && el.isContentEditable);
+}
+
+function dirOf(keys: Set<string>): EmoteId | null {
+  return WHEEL_DIR.get(`${+(keys.has("KeyD") || keys.has("ArrowRight")) - +(keys.has("KeyA") || keys.has("ArrowLeft"))},${+(keys.has("KeyS") || keys.has("ArrowDown")) - +(keys.has("KeyW") || keys.has("ArrowUp"))}`) ?? null;
+}
+
+function dirFromPoint(center: Point, x: number, y: number): EmoteId | null {
+  const dx = x - center.x;
+  const dy = y - center.y;
+  if (Math.hypot(dx, dy) < 24) return null;
+  return (((Math.round(Math.atan2(dx, -dy) / (Math.PI / 4)) % 8) + 8) % 8) as EmoteId;
+}
+
+function useEmoteWheel(canOpen: boolean, center: Point, onPick: (k: EmoteId) => void) {
+  const [wheel, setWheel] = useState<WheelState>(WHEEL_IDLE);
+  const wheelRef = useRef(wheel);
+  const canOpenRef = useRef(canOpen);
+  const centerRef = useRef(center);
+  const onPickRef = useRef(onPick);
+  const held = useRef(new Set<string>());
+  const touch = useRef<{ id: number; timer: ReturnType<typeof setTimeout> | null } | null>(null);
+  useEffect(() => {
+    canOpenRef.current = canOpen;
+    if (!canOpen && wheelRef.current.open) {
+      wheelRef.current = WHEEL_IDLE;
+      setWheel(WHEEL_IDLE);
+    }
+  }, [canOpen]);
+  useEffect(() => {
+    centerRef.current = center;
+    onPickRef.current = onPick;
+  });
+  const put = (next: WheelState) => {
+    wheelRef.current = next;
+    setWheel(next);
+  };
+  const choose = (selected: EmoteId | null) => {
+    const w = wheelRef.current;
+    if (!w.open || w.selected === selected) return;
+    put({ ...w, selected, nonce: selected === null ? w.nonce : w.nonce + 1 });
+  };
+  const openWheel = (byTouch = false) => {
+    if (!canOpenRef.current || typingNow() || document.querySelector("dialog[open]")) return;
+    held.current.clear();
+    put({ open: true, pinned: false, selected: null, center: centerRef.current, at: performance.now(), nonce: 0, touch: byTouch });
+    play("open", 0.45);
+  };
+  const closeWheel = (quiet = false) => {
+    if (!wheelRef.current.open) return;
+    held.current.clear();
+    put(WHEEL_IDLE);
+    if (!quiet) play("close", 0.35);
+  };
+  const commit = (selected: EmoteId | null) => {
+    closeWheel(true);
+    if (selected === null) return play("close", 0.35);
+    onPickRef.current(selected);
+  };
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.code === "KeyE" && !e.repeat) {
+        const w = wheelRef.current;
+        if (w.open && w.pinned) {
+          e.preventDefault();
+          commit(w.selected);
+          return;
+        }
+        if (!w.open && canOpenRef.current) {
+          e.preventDefault();
+          openWheel(false);
+          return;
+        }
+      }
+      const w = wheelRef.current;
+      if (!w.open) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeWheel();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        commit(w.selected);
+      } else if (WHEEL_KEYS.has(e.code)) {
+        e.preventDefault();
+        held.current.add(e.code);
+        choose(dirOf(held.current));
+      }
+    };
+    const up = (e: KeyboardEvent) => {
+      if (WHEEL_KEYS.has(e.code)) {
+        held.current.delete(e.code);
+        if (wheelRef.current.open) choose(dirOf(held.current));
+      }
+      if (e.code !== "KeyE") return;
+      const w = wheelRef.current;
+      if (!w.open || w.pinned) return;
+      e.preventDefault();
+      if (performance.now() - w.at <= 250) put({ ...w, pinned: true });
+      else commit(w.selected);
+    };
+    const move = (e: PointerEvent) => {
+      const w = wheelRef.current;
+      if (w.open) choose(dirFromPoint(w.center, e.clientX, e.clientY));
+    };
+    const pointerDown = (e: PointerEvent) => {
+      // 열린 휠에서 누르면 그 칸으로 확정하고 닫는다 (집이나 캐릭터가 대신 눌리지 않게 막는다)
+      if (wheelRef.current.open && e.pointerType !== "touch") {
+        e.preventDefault();
+        e.stopPropagation();
+        return commit(wheelRef.current.selected);
+      }
+      if (e.pointerType !== "touch" || wheelRef.current.open || !canOpenRef.current) return;
+      if (Math.hypot(e.clientX - centerRef.current.x, e.clientY - centerRef.current.y) > 90) return;
+      const timer = setTimeout(() => {
+        openWheel(true);
+        choose(dirFromPoint(centerRef.current, e.clientX, e.clientY));
+      }, 350);
+      touch.current = { id: e.pointerId, timer };
+    };
+    const pointerUp = (e: PointerEvent) => {
+      if (touch.current?.id !== e.pointerId) return;
+      if (touch.current.timer) clearTimeout(touch.current.timer);
+      touch.current = null;
+      const w = wheelRef.current;
+      if (w.open && w.touch) commit(w.selected);
+    };
+    addEventListener("keydown", down);
+    addEventListener("keyup", up);
+    addEventListener("pointermove", move);
+    addEventListener("pointerdown", pointerDown, true);
+    addEventListener("pointerup", pointerUp, true);
+    addEventListener("pointercancel", pointerUp, true);
+    return () => {
+      removeEventListener("keydown", down);
+      removeEventListener("keyup", up);
+      removeEventListener("pointermove", move);
+      removeEventListener("pointerdown", pointerDown, true);
+      removeEventListener("pointerup", pointerUp, true);
+      removeEventListener("pointercancel", pointerUp, true);
+    };
+    // 전역 입력은 ref만 읽는다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return { wheel, closeWheel };
+}
 
 const icon = (d: React.ReactNode) => (
   <svg viewBox="0 0 24 24" aria-hidden>
@@ -288,6 +452,43 @@ function ActVillageDemo({ demo }: { demo: string }) {
   );
 }
 
+function EmoteDemo() {
+  const params = new URLSearchParams(location.search);
+  const skin = SKINS.includes(params.get("skin") as Skin) ? (params.get("skin") as Skin) : "blob";
+  const positions = useRef<Positions>(new Map());
+  const [center, setCenter] = useState<Point>(() => ({ x: innerWidth / 2, y: innerHeight / 2 }));
+  const seats = [
+    demoSeat("demo-me", skin, "house-1", "none", 0),
+    demoSeat("demo-1", "chiikawa", "house-4", "straw", 1),
+    demoSeat("demo-2", "hachiware", "house-6", "bow", 2),
+    demoSeat("demo-3", "usagi", "house-8", "wizard", 3),
+  ];
+  const choose = (k: EmoteId) => {
+    emoted("demo-me", k);
+    play("chat", 0.35);
+  };
+  const { wheel } = useEmoteWheel(true, center, choose);
+  return (
+    <main className="fixed inset-0" style={{ background: "var(--sky)" }}>
+      <Village
+        seats={seats}
+        scene="day"
+        going={null}
+        iconRole={null}
+        shield={false}
+        positions={positions}
+        demo
+        hud={false}
+        freeze={wheel.open}
+        onMeScreen={(x, y) => setCenter({ x, y })}
+        onPick={() => {}}
+        onMove={() => {}}
+      />
+      <EmoteWheel open={wheel.open} center={wheel.center} selected={wheel.selected} nonce={wheel.nonce} cooldown={false} look={{ skin, hat: "none", color: COLORS[0] }} />
+    </main>
+  );
+}
+
 export default function Page() {
   const [demo, setDemo] = useState<string | null>(null);
   useEffect(() => setDemo(new URLSearchParams(location.search).get("demo") ?? ""), []);
@@ -371,6 +572,11 @@ export default function Page() {
           setError("");
         } else if (m.t === "typing") {
           typing(m.id, m.on);
+        } else if (m.t === "emote") {
+          if (typeof m.id === "string" && isEmoteId(m.k) && !stage.busy()) {
+            emoted(m.id, m.k);
+            play("chat", 0.35);
+          }
         } else if (m.t === "rtc") {
           void voice.handle(m.from, m.data);
         } else if (m.t === "pos") {
@@ -410,6 +616,7 @@ export default function Page() {
 
   if (demo === null) return <main className="flex flex-1 flex-col" />;
   if (demo.startsWith("cutin")) return <CutInDemo still={demo === "cutin-still"} />;
+  if (demo === "emote") return <EmoteDemo />;
   if (demo === "act-doctor" || demo === "recall-doctor-saved" || demo === "recall-slain" || demo === "recall-rescued" || demo === "dawn-blast" || demo === "act-cleaner") return <ActVillageDemo demo={demo} />;
   return (
     <main className="flex flex-1 flex-col">
@@ -697,6 +904,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
   };
   const [copied, setCopied] = useState(false);
   const [shut, setShut] = useState(""); // 결과 화면을 닫아 둔 판
+  const [meScreen, setMeScreen] = useState<Point>(() => ({ x: typeof innerWidth === "number" ? innerWidth / 2 : 0, y: typeof innerHeight === "number" ? innerHeight / 2 : 0 }));
 
   // 페이즈가 바뀌면 탭 제목으로 알린다 (소리는 useGameSound)
   const phaseKey = `${phase}-${view.day}`;
@@ -715,7 +923,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
       if (!live) return true;
       if (!p.alive) return !me.alive;
       return phase === "day" || (p.ally && me.team === "imposter");
-    });
+    }, Object.fromEntries(players.map((p) => [p.id, p.name])));
   });
   useEffect(() => () => voice.stop(), []);
 
@@ -764,13 +972,17 @@ function Game({ view, due, positions, send, leave }: GameProps) {
   // 연출이 어떤 까닭으로든 끝나지 않으면 화면을 돌려준다
   useEffect(() => {
     if (!replay && !call && !exile) return;
+    stage.hold(16000);
     const timer = setTimeout(() => {
       setReplay(null);
       setCall(null);
       setExile(null);
       setUnseen([]);
     }, 16000);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      stage.release();
+    };
   }, [replay, call, exile]);
 
   // Tab: 마을 사람과 기록, Enter: 말하기
@@ -905,6 +1117,15 @@ function Game({ view, due, positions, send, leave }: GameProps) {
   const pickSeat = (id: string) => (night ? visit(id) : send({ t: "pick", target: id }));
   const colorOf = Object.fromEntries(players.map((p, i) => [p.name, COLORS[i % COLORS.length]]));
   const canStart = players.length >= MIN_PLAYERS && (view.setup.auto || view.setup.slots.length === players.length);
+  const meIndex = Math.max(0, players.findIndex((p) => p.id === me.id));
+  const resultOpen = phase === "ended" && !exile && shut !== phaseKey;
+  const canEmote = !asList && !night && !open && !replay && !call && !exile && !reveal && !resultOpen && !stage.busy();
+  const chooseEmote = (k: EmoteId) => {
+    // 하던 감정표현이 있어도 새로 고른 것이 바로 나온다
+    emoted(me.id, k);
+    send({ t: "emote", k });
+  };
+  const emotes = useEmoteWheel(canEmote, meScreen, chooseEmote);
 
   // 밤 행동 고르기. round면 그림 단추(마을 화면), 아니면 글 단추(목록 화면)
   const modes = (round: boolean) =>
@@ -1015,6 +1236,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
         <div className="flex flex-col gap-1">
           <Volume />
           <Fx />
+          <Voice people={players.filter((p) => p.id !== me.id).map((p, i) => ({ name: p.name, color: colorOf[p.name] ?? COLORS[i % COLORS.length] }))} />
           <div className="row">
             <span className="gl w-12">{ICON.list}</span>
             <b className="d flex-1 text-lg font-normal">목록으로 보기</b>
@@ -1164,9 +1386,19 @@ function Game({ view, due, positions, send, leave }: GameProps) {
         }}
         burnt={phase === "day" ? view.dawn.flatMap((e) => (e.kind === "death" && (e.blast || e.bolt) ? [e.who] : [])) : []}
         unseen={unseen}
+        freeze={emotes.wheel.open}
+        onMeScreen={(x, y) => setMeScreen({ x, y })}
         onSeen={(id) => setUnseen((ids) => ids.filter((x) => x !== id))}
         onPick={pickSeat}
         onMove={(x, z) => send({ t: "move", x, z })}
+      />
+      <EmoteWheel
+        open={emotes.wheel.open}
+        center={emotes.wheel.center}
+        selected={emotes.wheel.selected}
+        nonce={emotes.wheel.nonce}
+        cooldown={false}
+        look={{ skin: players[meIndex]?.skin ?? "blob", hat: players[meIndex]?.hat ?? "none", color: COLORS[meIndex % COLORS.length] }}
       />
       {/* 회상이 도는 동안은 시계와 대화만 남긴다 */}
       <div className={`pointer-events-none absolute inset-0 *:pointer-events-auto ${replay || call || exile ? "replaying" : ""}`}>
@@ -1357,6 +1589,63 @@ function Volume() {
         style={{ "--v": `${v * 100}%` } as React.CSSProperties}
       />
     </div>
+  );
+}
+
+// 목소리 설정: 마이크 켜기, 내 목소리 크기(키울 수도 있다), 남들 목소리 전체 크기, 사람별 크기, 눌러서 말하기, 잡음 줄이기
+function Voice({ people }: { people: { name: string; color: string }[] }) {
+  const on = useVoiceOn();
+  const v = useVoicePrefs();
+  if (!voice.able()) return null;
+  const slider = (label: string, value: number, max: number, set: (n: number) => void) => (
+    <input
+      type="range"
+      aria-label={label}
+      min={0}
+      max={max}
+      step={0.05}
+      value={value}
+      onChange={(e) => set(Number(e.target.value))}
+      className="vol"
+      style={{ "--v": `${(value / max) * 100}%` } as React.CSSProperties}
+    />
+  );
+  return (
+    <>
+      <div className="hr" />
+      <div className="row">
+        <button className="ib" aria-label="마이크" aria-pressed={on} onClick={() => (on ? voice.stop() : void voice.start().catch(() => {}))}>
+          {ICON.mic}
+        </button>
+        {slider("내 목소리 크기", v.mic, 3, (mic) => voice.set({ mic }))}
+        <small className="w-12 text-right tabular-nums opacity-70">{Math.round(v.mic * 100)}%</small>
+      </div>
+      <div className="row">
+        <span className="gl w-12">{speaker(v.out)}</span>
+        {slider("남들 목소리 크기", v.out, 2, (out) => voice.set({ out }))}
+        <small className="w-12 text-right tabular-nums opacity-70">{Math.round(v.out * 100)}%</small>
+      </div>
+      {people.map((p) => (
+        <div key={p.name} className="row">
+          <span className="face w-28 shrink-0 truncate" title={p.name}>
+            <i style={{ background: p.color }} />
+            {p.name}
+          </span>
+          {slider(`${p.name} 목소리 크기`, v.peers[p.name] ?? 1, 2, (n) => voice.setPeer(p.name, n))}
+          <small className="w-12 text-right tabular-nums opacity-70">{Math.round((v.peers[p.name] ?? 1) * 100)}%</small>
+        </div>
+      ))}
+      <div className="row">
+        <span className="gl w-12">{ICON.mic}</span>
+        <b className="d flex-1 text-lg font-normal">V를 누르는 동안만 말하기</b>
+        <button role="switch" aria-checked={v.ptt} aria-label="V를 누르는 동안만 말하기" className="sw" onClick={() => voice.set({ ptt: !v.ptt })} />
+      </div>
+      <div className="row">
+        <span className="gl w-12">{ICON.fx}</span>
+        <b className="d flex-1 text-lg font-normal">잡음 줄이기</b>
+        <button role="switch" aria-checked={v.quiet} aria-label="잡음 줄이기" className="sw" onClick={() => voice.set({ quiet: !v.quiet })} />
+      </div>
+    </>
   );
 }
 
