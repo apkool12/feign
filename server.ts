@@ -36,7 +36,7 @@ function arm(room: G.Room, ms: number) {
   timers.set(room, timer);
 }
 
-function schedule(room: G.Room) {
+function schedule(room: G.Room, extra = 0) {
   clearTimeout(timers.get(room));
   timers.delete(room);
   // TIMER_SCALE: 시뮬레이션처럼 천천히 진행해야 할 때 제한 시간을 늘린다
@@ -47,7 +47,8 @@ function schedule(room: G.Room) {
     (room.phase === "night" ? night * 1000 : room.phase !== "day" ? 0 : room.day === 0 ? G.ELECTION_MS : day * 1000);
   room.deadline = null;
   // 1일차 밤에는 역할을 읽을 시간을 더 준다
-  if (ms) arm(room, ms + (room.phase === "night" && room.day === 1 ? G.FIRST_NIGHT_MS : 0));
+  // 밤에는 연출이 쓰는 시간도 더 준다
+  if (ms) arm(room, ms + (room.phase === "night" ? G.DUSK_MS + extra + (room.day === 1 ? G.FIRST_NIGHT_MS : 0) : 0));
 }
 
 // 기다릴 사람이 없으면 곧 마감한다. 바로 넘기지 않는 것은 잘못 누른 선택을 바꿀 틈을 주기 위해서다.
@@ -57,8 +58,11 @@ function closeSoon(room: G.Room) {
 }
 
 function advance(room: G.Room) {
+  const alive = () => room.players.filter((p) => p.alive).length;
+  const voting = room.phase === "day";
+  const before = alive();
   G.advance(room);
-  schedule(room);
+  schedule(room, voting && alive() < before ? G.EXILE_MS : 0); // 추방 연출 동안 밤 시간이 줄지 않게
 }
 
 function newCode(): string {
