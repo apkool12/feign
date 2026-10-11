@@ -164,12 +164,13 @@ const ROLE_MARK: Record<Slot["role"], string> = {
 };
 
 // 연출만 따로 보기: /?demo=cutin (밀고자 지목 컷인을 되풀이한다)
-function CutInDemo() {
+function CutInDemo({ still }: { still: boolean }) {
   const [n, setN] = useState(0);
   useEffect(() => {
+    if (still) return;
     const timer = setInterval(() => setN((x) => x + 1), 3600);
     return () => clearInterval(timer);
-  }, []);
+  }, [still]);
   const looks = [
     { skin: "blob", hat: "wizard", color: COLORS[0] },
     { skin: "blob", hat: "straw", color: COLORS[3] },
@@ -177,7 +178,7 @@ function CutInDemo() {
   ];
   return (
     <main className="fixed inset-0" style={{ background: "var(--sky)" }}>
-      <CutIn key={n} by={looks[n % 3]} who={looks[(n + 1) % 3]} />
+      <CutIn key={n} by={looks[n % 3]} who={looks[(n + 1) % 3]} still={still} />
     </main>
   );
 }
@@ -301,7 +302,7 @@ export default function Page() {
     location.reload();
   };
 
-  if (demo === "cutin") return <CutInDemo />;
+  if (demo.startsWith("cutin")) return <CutInDemo still={demo === "cutin-still"} />;
   return (
     <main className="flex flex-1 flex-col">
       <div className="pointer-events-none fixed inset-x-0 top-24 z-30 flex flex-col items-center gap-2 px-3">
