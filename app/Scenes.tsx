@@ -951,6 +951,11 @@ export function Replay({ flash, call, exile, seats, spots, sizes, heights, doors
     }
     if (!home.current) {
       home.current = { pos: state.camera.position.clone(), look: orbit.target.clone() };
+      // 밤의 방(하늘 높이 떠 있다)에서 막 넘어온 프레임이면 카메라가 아직 방에 있다. 마을의 기본 자리에서 시작한다.
+      if (home.current.pos.y > 60) {
+        home.current.pos.set(0, 14.5, Math.hypot(spots[0].door.x, spots[0].door.z) + 9);
+        home.current.look.set(0, 0, 0);
+      }
       // 장면이 끝나면 내 캐릭터는 추방 뒤에는 집 앞, 아침에는 광장에 선다. 카메라도 보던 각도 그대로 그 자리로 돌아간다.
       const mine = spots[seats.findIndex((s) => s.isMe)];
       if (mine) {

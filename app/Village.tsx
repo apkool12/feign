@@ -92,6 +92,12 @@ const ROOM_ORIGIN = new THREE.Vector3(0, 120, -90); // 마을 땅(언덕·숲)�
 const ROOM_CAMERA = new THREE.Vector3(0, 3.4, 6.2).add(ROOM_ORIGIN);
 const ROOM_LOOK = new THREE.Vector3(0, 0.7, -0.4).add(ROOM_ORIGIN);
 const ROOM_BOUNDS = { x: 1.9, z0: -1.35, z1: 1.35 };
+// 침대와 탁자·걸상 자리 [x0, x1, z0, z1]. 몸 반지름만큼 넉넉히 잡았다.
+const ROOM_BLOCKS = [
+  [0.6, 3, -2, 0.4],
+  [-3, -1.05, -0.6, 1.1],
+];
+const roomBlocked = (x: number, z: number) => ROOM_BLOCKS.some(([x0, x1, z0, z1]) => x > x0 && x < x1 && z > z0 && z < z1);
 const ROOM_ANCHORS = {
   "at-bed": new THREE.Vector3(1.25, 0.42, -0.95),
   "at-sit": new THREE.Vector3(0.8, 0.42, -0.35),
@@ -507,7 +513,7 @@ function useKeys(blocked = false) {
 function Camera({ radius, controls, demo, room }: { radius: number; controls: RefObject<OrbitControls | null>; demo: boolean; room: boolean }) {
   const { camera, gl } = useThree();
   const mode = useRef<"demo" | "room" | "world" | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const made = new OrbitControls(camera, gl.domElement);
     made.enablePan = false;
     made.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.ROTATE };
@@ -529,7 +535,8 @@ function Camera({ radius, controls, demo, room }: { radius: number; controls: Re
       made.dispose();
     };
   }, [camera, gl, controls, demo, radius]);
-  useEffect(() => {
+  // 방↔마을은 그리기 전에 넘긴다. 한 프레임 늦으면 회상 장면이 방 카메라 자리를 "돌아갈 자리"로 잡는다.
+  useLayoutEffect(() => {
     const c = controls.current;
     if (!c) return;
     const next = room ? "room" : demo ? "demo" : "world"; // 방 안은 메뉴 배경(demo)에서도 방 카메라로 본다
@@ -967,6 +974,8 @@ function readRoomAnchors(root: THREE.Object3D): RoomAnchors {
   }
   return made;
 }
+
+useLoader.preload(GLTFLoader, "/models/room.glb"); // 첫 밤에 방이 늦게 떠 캐릭터만 허공에 보이지 않게
 
 function RoomModel({ door, onAnchors }: { door: RefObject<number>; onAnchors: (anchors: RoomAnchors) => void }) {
   const gltf = useLoader(GLTFLoader, "/models/room.glb");
@@ -1589,8 +1598,11 @@ function RoomResident({
       const dx = forward.x * ahead + right.x * side;
       const dz = forward.z * ahead + right.z * side;
       const len = Math.hypot(dx, dz) || 1;
-      g.position.x = THREE.MathUtils.clamp(g.position.x + (dx / len) * SPEED * dt, -ROOM_BOUNDS.x, ROOM_BOUNDS.x);
-      g.position.z = THREE.MathUtils.clamp(g.position.z + (dz / len) * SPEED * dt, ROOM_BOUNDS.z0, ROOM_BOUNDS.z1);
+      // 축마다 따로 옮겨 가구에 닿으면 미끄러지듯 비껴간다
+      const nx = THREE.MathUtils.clamp(g.position.x + (dx / len) * SPEED * dt, -ROOM_BOUNDS.x, ROOM_BOUNDS.x);
+      if (!roomBlocked(nx, g.position.z)) g.position.x = nx;
+      const nz = THREE.MathUtils.clamp(g.position.z + (dz / len) * SPEED * dt, ROOM_BOUNDS.z0, ROOM_BOUNDS.z1);
+      if (!roomBlocked(g.position.x, nz)) g.position.z = nz;
       turnTo(g, Math.atan2(dx, dz), Math.min(1, dt * 12));
       moving = true;
     }
