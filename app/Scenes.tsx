@@ -30,11 +30,13 @@ type Part = { seat: Seat | null; color: string; segs: Seg[]; prop?: string; ball
 type Fx = { t0: number; t1: number; at: V; rot: number; kind: string; h?: number; door?: number; armed?: boolean; snap?: number; house?: { file: string; color: string } };
 type Icon = { t0: number; t1: number; at: V; role: string }; // 떠오르는 역할 패
 type Cue = { t: number; name: Sfx };
+type DoorMove = { t0: number; t1: number; a: number; b: number };
+type RoomReplay = { origin: V; anchors: Record<string, V>; door: RefObject<number> };
 // 장면 하나. 시간은 장면이 시작된 때부터 잰다 (처음 LEAD초는 카메라가 자리를 잡는다).
-type Act = { len: number; cast: Part[]; fx?: Fx[]; icons?: Icon[]; cues?: Cue[]; shakes?: number[]; pos: V; look: V; follow?: number };
+type Act = { len: number; cast: Part[]; fx?: Fx[]; icons?: Icon[]; cues?: Cue[]; shakes?: number[]; doors?: DoorMove[]; pos: V; look: V; follow?: number; flat?: boolean };
 type Shot = { t0: number; pos: V; look: V; follow: number; base: V | null };
 // sum부터는 건너뛰기로 넘어갈 수 있는 끝부분이고, 배우들은 sum + hold까지 보인다. beats는 화면 아래 글이 바뀌는 때, marks는 죽음이 드러나는 때.
-type Script = { cast: Part[]; fx: Fx[]; icons: Icon[]; cues: Cue[]; shots: Shot[]; beats: number[]; marks: { t: number; id: string }[]; shakes?: number[]; sum: number; hold: number; total: number };
+type Script = { cast: Part[]; fx: Fx[]; icons: Icon[]; cues: Cue[]; shots: Shot[]; beats: number[]; marks: { t: number; id: string }[]; shakes?: number[]; doors?: DoorMove[]; flat?: boolean; sum: number; hold: number; total: number };
 
 const LEAD = 0.9; // 카메라가 자리를 잡는 시간
 const SUM = 2; // 본 것을 정리해 보여 주는 시간
@@ -49,7 +51,39 @@ const smooth = (x: number) => {
   return u * u * (3 - 2 * u);
 };
 
-function write(flash: Flash, seats: Seat[], spots: Spot[], sizes: number[], heights: number[], doors: number[]): Script | null {
+function pack(acts: Act[], limit = MOST, fitAll = false): Script | null {
+  if (!acts.length) return null;
+  // 뒤의 장면들을 줄여 전체 길이를 맞춘다. 방 장면과 마을 회상이 나뉠 때는 둘 다 조금씩 당긴다.
+  const all = acts.reduce((sum, a) => sum + a.len, 0);
+  const rest = acts.slice(1).reduce((sum, a) => sum + a.len, 0);
+  const whole = fitAll && all > limit ? limit / all : 1;
+  const quick = !fitAll && rest > 0 ? Math.min(1, Math.max(0.55, (limit - acts[0].len) / rest)) : 1;
+  const script: Script = { cast: [], fx: [], icons: [], cues: [], shots: [], beats: [], marks: [], sum: 0, hold: 0, total: 0, flat: acts.some((a) => a.flat) };
+  let off = 0;
+  acts.forEach((a, n) => {
+    const k = fitAll ? whole : n ? quick : 1;
+    const last = n === acts.length - 1;
+    const at = (t: number) => (last && t >= a.len ? 1e9 : off + Math.min(t, a.len) * k); // 마지막 장면의 사람들은 정리가 끝날 때까지 남는다
+    const base = a.follow === undefined ? null : a.cast[a.follow].segs[0].b;
+    script.shots.push({ t0: off, pos: a.pos, look: a.look, follow: a.follow === undefined ? -1 : script.cast.length + a.follow, base });
+    script.cast.push(...a.cast.map((p) => ({ ...p, segs: p.segs.map((s) => ({ ...s, t0: at(s.t0), t1: at(s.t1) })) })));
+    script.fx.push(...(a.fx ?? []).map((f) => ({ ...f, t0: at(f.t0), t1: at(f.t1) })));
+    script.icons.push(...(a.icons ?? []).map((i) => ({ ...i, t0: at(i.t0), t1: at(i.t1) })));
+    script.cues.push(...(a.cues ?? []).map((c) => ({ ...c, t: off + c.t * k })));
+    if (a.doors?.length) script.doors = [...(script.doors ?? []), ...a.doors.map((d) => ({ ...d, t0: at(d.t0), t1: at(d.t1) }))];
+    if (a.shakes?.length) script.shakes = [...(script.shakes ?? []), ...a.shakes.map((t) => off + t * k)];
+    off += a.len * k;
+  });
+  script.cues.sort((a, b) => a.t - b.t);
+  script.doors?.sort((a, b) => a.t0 - b.t0);
+  script.sum = off + 0.2;
+  script.hold = SUM + (acts.length - 1) * 0.6;
+  script.total = script.sum + script.hold + OUT;
+  script.beats = [script.sum];
+  return script;
+}
+
+function write(flash: Flash, seats: Seat[], spots: Spot[], sizes: number[], heights: number[], doors: number[], limit = MOST, fitAll = false): Script | null {
   const index = (id: string) => seats.findIndex((s) => s.id === id);
   const part = (i: number, segs: Seg[]): Part => ({ seat: { ...seats[i], alive: true, won: false, done: false }, color: COLORS[i % COLORS.length], segs });
   const shade = (segs: Seg[]): Part => ({ seat: null, color: "", segs });
@@ -471,32 +505,179 @@ function write(flash: Flash, seats: Seat[], spots: Spot[], sizes: number[], heig
     }
   }
 
-  const acts = flash.map(act).filter((a) => a !== null);
-  if (!acts.length) return null;
-  // 뒤의 장면들을 줄여 전체 길이를 맞춘다
-  const rest = acts.slice(1).reduce((sum, a) => sum + a.len, 0);
-  const quick = rest > 0 ? Math.min(1, Math.max(0.55, (MOST - acts[0].len) / rest)) : 1;
-  const script: Script = { cast: [], fx: [], icons: [], cues: [], shots: [], beats: [], marks: [], sum: 0, hold: 0, total: 0 };
-  let off = 0;
-  acts.forEach((a, n) => {
-    const k = n ? quick : 1;
-    const last = n === acts.length - 1;
-    const at = (t: number) => (last && t >= a.len ? 1e9 : off + Math.min(t, a.len) * k); // 마지막 장면의 사람들은 정리가 끝날 때까지 남는다
-    const base = a.follow === undefined ? null : a.cast[a.follow].segs[0].b;
-    script.shots.push({ t0: off, pos: a.pos, look: a.look, follow: a.follow === undefined ? -1 : script.cast.length + a.follow, base });
-    script.cast.push(...a.cast.map((p) => ({ ...p, segs: p.segs.map((s) => ({ ...s, t0: at(s.t0), t1: at(s.t1) })) })));
-    script.fx.push(...(a.fx ?? []).map((f) => ({ ...f, t0: at(f.t0), t1: at(f.t1) })));
-    script.icons.push(...(a.icons ?? []).map((i) => ({ ...i, t0: at(i.t0), t1: at(i.t1) })));
-    script.cues.push(...(a.cues ?? []).map((c) => ({ ...c, t: off + c.t * k })));
-    if (a.shakes?.length) script.shakes = [...(script.shakes ?? []), ...a.shakes.map((t) => off + t * k)];
-    off += a.len * k;
+  return pack(flash.map(act).filter((a): a is Act => a !== null), limit, fitAll);
+}
+
+function writeRoom(flash: Flash, seats: Seat[], room: RoomReplay, limit = MOST, fitAll = false): Script | null {
+  const me = seats.findIndex((s) => s.isMe);
+  if (me < 0) return null;
+  const at = (name: string) => room.anchors[name].clone().add(room.origin);
+  const mix = (a: V, b: V, u: number) => a.clone().lerp(b, u);
+  const part = (segs: Seg[]): Part => ({ seat: { ...seats[me], alive: true, won: false, done: false }, color: COLORS[me % COLORS.length], segs });
+  const shade = (segs: Seg[]): Part => ({ seat: null, color: "", segs });
+  const door = (t0: number, t1: number, a: number, b: number): DoorMove => ({ t0, t1, a, b });
+  const cam = room.origin.clone().add(new THREE.Vector3(0, 3.35, 6.15));
+  const look = room.origin.clone().add(new THREE.Vector3(0, 0.75, -0.5));
+  const bed = at("at-bed");
+  const rug = at("at-rug");
+  const bedside = at("at-bedside");
+  const doorIn = at("at-door-in");
+  const doorOut = at("at-door-out");
+  const passA = at("at-pass-a");
+  const passB = at("at-pass-b");
+  const windowAt = mix(passA, passB, 0.5);
+
+  const cprPatient = (body: V, face: V, start: number, revive: number, cheer: number, end: number): Seg[] => {
+    const segs: Seg[] = [];
+    for (const press of [0.2, 0.55, 0.9, 1.25]) {
+      const up = start + press;
+      const down = Math.min(up + 0.1, revive);
+      const settle = Math.min(up + 0.32, revive);
+      segs.push({ t0: up, t1: down, a: body, b: body, clip: "die", face, up: [0, 0.08] });
+      if (settle > down) segs.push({ t0: down, t1: settle, a: body, b: body, clip: "die", face, up: [0.08, 0] });
+    }
+    segs.push({ t0: revive, t1: cheer, a: body, b: body, clip: "revive", face }, { t0: cheer, t1: end, a: body, b: body, clip: "cheer", face });
+    return segs;
+  };
+  const cprHelper = (start: number, revive: number, cheer: number, end: number): Seg[] => [
+    { t0: start, t1: revive, a: bedside, b: bedside, clip: actClip("doctorSaved"), face: rug },
+    { t0: revive, t1: cheer, a: bedside, b: bedside, clip: "idle", face: rug },
+    { t0: cheer, t1: end, a: bedside, b: doorOut, clip: "walk", face: doorOut, s1: 0.35 },
+  ];
+  const hit = () => ({
+    attacker: [
+      { t0: 0.35, t1: 0.75, a: doorOut, b: doorIn, clip: "sneak", face: bed },
+      { t0: 0.75, t1: 1.18, a: doorIn, b: bedside, clip: "sneak", face: bed },
+      { t0: 1.18, t1: 1.58, a: bedside, b: bedside, clip: actClip("kill"), face: bed },
+      { t0: 1.58, t1: 2.05, a: bedside, b: doorIn, clip: "walk", face: doorOut },
+      { t0: 2.05, t1: 2.3, a: doorIn, b: doorOut, clip: "walk", face: doorOut, s1: 0.35 },
+    ] satisfies Seg[],
+    victim: [
+      { t0: 0, t1: 1.08, a: bed, b: bed, clip: "idle", face: bedside },
+      { t0: 1.08, t1: 1.58, a: bed, b: bed, clip: "startle", face: bedside },
+      { t0: 1.58, t1: 1.95, a: bed, b: rug, clip: "startle", face: bedside },
+    ] satisfies Seg[],
+    doors: [door(0.25, 0.58, 0, 1), door(2.15, 2.42, 1, 0)],
+    fx: [{ t0: 1.5, t1: 2.35, at: rug, rot: 0, kind: "dust" }] satisfies Fx[],
+    cues: [
+      { t: 0.33, name: "door" },
+      { t: 1.5, name: "thud" },
+    ] satisfies Cue[],
   });
-  script.cues.sort((a, b) => a.t - b.t);
-  script.sum = off + 0.2;
-  script.hold = SUM + (acts.length - 1) * 0.6;
-  script.total = script.sum + script.hold + OUT;
-  script.beats = [script.sum];
-  return script;
+  const base = { pos: cam, look, flat: true };
+
+  function act(scene: Scene): Act | null {
+    switch (scene.kind) {
+      case "healed": {
+        const len = 4.15;
+        return {
+          ...base,
+          len,
+          cast: [
+            shade([
+              { t0: 0.15, t1: 0.9, a: passA, b: passB, clip: "sneak", face: bed },
+              { t0: 1.08, t1: 1.45, a: doorOut, b: doorIn, clip: "sneak", face: bed },
+              { t0: 1.45, t1: 1.9, a: doorIn, b: bedside, clip: "walk", face: bed },
+              { t0: 1.9, t1: 2.9, a: bedside, b: bedside, clip: actClip("doctor"), face: bed },
+              { t0: 2.9, t1: 3.35, a: bedside, b: doorIn, clip: "walk", face: doorOut },
+              { t0: 3.35, t1: 3.72, a: doorIn, b: doorOut, clip: "walk", face: doorOut, s1: 0.35 },
+            ]),
+            part([{ t0: 0, t1: 2.3, a: bed, b: bed, clip: "idle", face: bedside }, { t0: 2.3, t1: len, a: bed, b: bed, clip: "cheer", face: bedside }]),
+          ],
+          doors: [door(0.95, 1.25, 0, 1), door(3.62, 3.9, 1, 0)],
+          cues: [
+            { t: 1, name: "door" },
+            { t: 2.05, name: "doctor" },
+            { t: 3.78, name: "doorShut" },
+          ],
+        };
+      }
+      case "rescued": {
+        const first = hit();
+        const T = { cpr: 3.0, revive: 4.05, cheer: 4.55, end: 4.9 };
+        return {
+          ...base,
+          len: 5.05,
+          cast: [
+            shade(first.attacker),
+            shade([{ t0: 2.4, t1: 2.72, a: doorOut, b: doorIn, clip: "sneak", face: rug }, { t0: 2.72, t1: T.cpr, a: doorIn, b: bedside, clip: "walk", face: rug }, ...cprHelper(T.cpr, T.revive, T.cheer, T.end)]),
+            part([...first.victim, { t0: 1.95, t1: T.cpr + 0.2, a: rug, b: rug, clip: "die", face: bedside }, ...cprPatient(rug, bedside, T.cpr, T.revive, T.cheer, T.end)]),
+          ],
+          fx: first.fx,
+          doors: [...first.doors, door(2.28, 2.56, 0, 1), door(4.78, 5.02, 1, 0)],
+          cues: [...first.cues, { t: 2.36, name: "door" }, { t: T.revive - 0.9, name: "doctor" }],
+          shakes: [1.5],
+        };
+      }
+      case "slain": {
+        const first = hit();
+        const len = 3.15;
+        return {
+          ...base,
+          len,
+          cast: [shade(first.attacker), part([...first.victim, { t0: 1.95, t1: len, a: rug, b: rug, clip: "die", face: bedside }])],
+          fx: first.fx,
+          doors: first.doors,
+          cues: first.cues,
+          shakes: [1.5],
+        };
+      }
+      case "raided": {
+        if (flash.some((s) => s.kind === "rescued")) return null; // 구조 장면에서 이미 들이닥치는 모습을 본다
+        const len = 3.45;
+        return {
+          ...base,
+          len,
+          cast: [
+            shade([
+              { t0: 0.25, t1: 0.55, a: doorOut, b: doorIn, clip: "walk", face: bed },
+              { t0: 0.55, t1: 1.05, a: doorIn, b: bedside, clip: "walk", face: bed },
+              { t0: 1.05, t1: 2.55, a: bedside, b: bedside, clip: actClip("blocker"), face: bed },
+              { t0: 2.55, t1: 3.05, a: bedside, b: doorOut, clip: "walk", face: doorOut, s1: 0.35 },
+            ]),
+            part([{ t0: 0, t1: 1.0, a: bed, b: bed, clip: "idle", face: bedside }, { t0: 1.0, t1: 1.8, a: bed, b: bed, clip: actClip("snitchTarget"), face: bedside }, { t0: 1.8, t1: len, a: bed, b: bed, clip: "sad", face: bedside }]),
+          ],
+          fx: [{ t0: 0.28, t1: 1.2, at: doorIn, rot: 0, kind: "dust" }],
+          doors: [door(0.1, 0.3, 0, 1), door(3.0, 3.25, 1, 0)],
+          cues: [
+            { t: 0.18, name: "door" },
+            { t: 0.3, name: "thud" },
+          ],
+          shakes: [0.3],
+        };
+      }
+      case "provoked": {
+        const len = 3;
+        return {
+          ...base,
+          len,
+          cast: [
+            shade([{ t0: 0.25, t1: len - 0.2, a: windowAt, b: windowAt, clip: actClip("provoker"), face: bed }]),
+            part([{ t0: 0, t1: 1.0, a: bed, b: bed, clip: "idle", face: windowAt }, { t0: 1.0, t1: 1.65, a: bed, b: bed, clip: "startle", face: windowAt }, { t0: 1.65, t1: len, a: bed, b: bed, clip: "sad", face: windowAt }]),
+          ],
+          cues: [{ t: 0.45, name: "provoker" }],
+        };
+      }
+      case "blocked": {
+        const len = 3.2;
+        return {
+          ...base,
+          len,
+          cast: [
+            shade([{ t0: 0.7, t1: len, a: windowAt, b: windowAt, clip: actClip("blocker"), face: doorIn }]),
+            part([{ t0: 0, t1: 0.85, a: bed, b: doorIn, clip: "walk", face: doorOut }, { t0: 0.85, t1: 1.5, a: doorIn, b: doorIn, clip: "startle", face: doorOut }, { t0: 1.5, t1: len, a: doorIn, b: doorIn, clip: "sad", face: windowAt }]),
+          ],
+          cues: [
+            { t: 0.85, name: "doorShut" },
+            { t: 1.05, name: "blocker" },
+          ],
+        };
+      }
+      default:
+        return null;
+    }
+  }
+  return pack(flash.map(act).filter((a): a is Act => a !== null), limit, fitAll);
 }
 
 const GATHER = 2.6; // 문에서 나와 광장에 모이는 시간
@@ -678,6 +859,9 @@ type Props = {
   flash?: Flash | null; // 내 회상
   call?: Dawn[] | null; // 아침 발표
   exile?: Exile | null; // 추방
+  room?: RoomReplay; // 방 안에서 재생하는 새벽 회상
+  limit?: number;
+  fitAll?: boolean;
   seats: Seat[];
   spots: Spot[];
   sizes: number[]; // 집마다의 반경
@@ -848,9 +1032,9 @@ function Balloons({ clock, from, rise }: { clock: RefObject<{ t: number }>; from
 
 const within = (x: { t0: number; t1: number }, t: number) => t >= x.t0 && t < x.t1;
 
-export function Replay({ flash, call, exile, seats, spots, sizes, heights, doors, land, calm, controls, onBeat, onMark, onEnd }: Props) {
+export function Replay({ flash, call, exile, room, limit, fitAll = false, seats, spots, sizes, heights, doors, land, calm, controls, onBeat, onMark, onEnd }: Props) {
   // 장면은 시작할 때의 마을 그대로 끝까지 간다
-  const script = useMemo(() => (exile ? banish(exile, seats, spots, sizes) : call ? announce(call, seats, spots, sizes) : flash ? write(flash, seats, spots, sizes, heights, doors) : null), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const script = useMemo(() => (exile ? banish(exile, seats, spots, sizes) : call ? announce(call, seats, spots, sizes) : flash ? (room ? writeRoom(flash, seats, room, limit, fitAll) : write(flash, seats, spots, sizes, heights, doors, limit, fitAll)) : null), []); // eslint-disable-line react-hooks/exhaustive-deps
   const groups = useRef<(THREE.Group | null)[]>([]);
   const clips = useMemo(() => (script?.cast ?? []).map(() => ({ current: "idle" })), [script]);
   // 모션 줄이기면 장면 없이 글만: 회상은 정리부터, 발표는 3초 동안 전부 띄워 둔다
@@ -866,6 +1050,7 @@ export function Replay({ flash, call, exile, seats, spots, sizes, heights, doors
 
   useEffect(() => {
     if (!script) return done.current();
+    if (room) room.door.current = 0;
     if (flash || exile) {
       // 회상이 끝나야 새벽이, 추방이 끝나야 해 질 녘이 온다. 발표는 새벽과 함께 가므로 무대를 잡지 않는다.
       stage.hold((script.total - clock.current.t) * 1000);
@@ -895,6 +1080,7 @@ export function Replay({ flash, call, exile, seats, spots, sizes, heights, doors
         c.target.copy(home.current.look);
         home.current = null;
       }
+      if (room) room.door.current = 0;
       c.enabled = true;
       c.update();
     };
@@ -908,6 +1094,14 @@ export function Replay({ flash, call, exile, seats, spots, sizes, heights, doors
     for (; c.beat < script.beats.length && (calm || t >= script.beats[c.beat]); c.beat++) onBeat(c.beat);
     for (; c.mark < script.marks.length && (calm || t >= script.marks[c.mark].t); c.mark++) onMark?.(script.marks[c.mark].id);
     for (; c.shake < (script.shakes?.length ?? 0) && t >= script.shakes![c.shake]; c.shake++) if (!calm) shake(9, 0.3);
+    if (room?.door && script.doors?.length) {
+      let open = 0;
+      for (const move of script.doors) {
+        if (t < move.t0) break;
+        open = t < move.t1 ? move.a + (move.b - move.a) * smooth((t - move.t0) / (move.t1 - move.t0)) : move.b;
+      }
+      room.door.current = open;
+    }
     const showing = calm || t >= script.sum + script.hold ? "" : [...script.fx, ...script.icons].map((x, i) => (within(x, t) ? `${i}${"snap" in x && x.snap !== undefined && t >= x.snap ? "!" : ""}` : "")).join(",");
     if (showing !== live) setLive(showing);
     for (; c.cue < script.cues.length && t >= script.cues[c.cue].t; c.cue++) {
@@ -928,7 +1122,8 @@ export function Replay({ flash, call, exile, seats, spots, sizes, heights, doors
         const turned = a0 + turnTo(a0, angle(seg.b)) * u;
         g.position.set(Math.sin(turned), 0, Math.cos(turned)).multiplyScalar(seg.a.length() + (seg.b.length() - seg.a.length()) * u);
       } else g.position.lerpVectors(seg.a, seg.b, u);
-      g.position.y = lift(land, g.position.x, g.position.z) + (seg.up ? seg.up[0] + (seg.up[1] - seg.up[0]) * (seg.up[0] > seg.up[1] ? u * u : u) : 0); // 떨어질 때는 점점 빠르게
+      g.position.y = script.flat ? seg.a.y + (seg.b.y - seg.a.y) * u : lift(land, g.position.x, g.position.z);
+      g.position.y += seg.up ? seg.up[0] + (seg.up[1] - seg.up[0]) * (seg.up[0] > seg.up[1] ? u * u : u) : 0; // 떨어질 때는 점점 빠르게
       if (seg.sway) g.position.x += Math.sin(t * 3.2) * 0.35 * u;
       g.scale.setScalar(Math.max(0.001, (seg.s0 ?? 1) + ((seg.s1 ?? 1) - (seg.s0 ?? 1)) * u));
       // 걷는 동안은 가는 쪽을 본다
@@ -952,12 +1147,12 @@ export function Replay({ flash, call, exile, seats, spots, sizes, heights, doors
     if (!home.current) {
       home.current = { pos: state.camera.position.clone(), look: orbit.target.clone() };
       // 밤의 방(하늘 높이 떠 있다)에서 막 넘어온 프레임이면 카메라가 아직 방에 있다. 마을의 기본 자리에서 시작한다.
-      if (home.current.pos.y > 60) {
+      if (!room && home.current.pos.y > 60) {
         home.current.pos.set(0, 14.5, Math.hypot(spots[0].door.x, spots[0].door.z) + 9);
         home.current.look.set(0, 0, 0);
       }
       // 장면이 끝나면 내 캐릭터는 추방 뒤에는 집 앞, 아침에는 광장에 선다. 카메라도 보던 각도 그대로 그 자리로 돌아간다.
-      const mine = spots[seats.findIndex((s) => s.isMe)];
+      const mine = !room && spots[seats.findIndex((s) => s.isMe)];
       if (mine) {
         const to = exile ? mine.door : mine.plaza;
         here.set(to.x - home.current.look.x, 0, to.z - home.current.look.z);
