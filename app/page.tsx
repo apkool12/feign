@@ -950,7 +950,7 @@ type GameProps = {
 };
 
 const ROLE_BY_NAME = Object.fromEntries((Object.keys(ROLES) as Role[]).map((r) => [ROLES[r].name, r]));
-// 서버가 주는 표기("의사(시민)", "정신병자·감시자(시민)")에서 그림으로 쓸 역할을 찾는다
+// 서버가 주는 표기("의사(시민)", "정신병자(시민)·감시자인 줄 앎")에서 그림으로 쓸 역할을 찾는다
 function roleOf(label: string | null): Slot["role"] | null {
   if (!label) return null;
   if (label.startsWith(INSANE.name)) return "insane";

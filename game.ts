@@ -328,10 +328,10 @@ function shuffle<T>(a: T[], rng: Rng): T[] {
   return a;
 }
 
-// 인원수에 맞춰 역할을 뽑는다. 임포스터 1~2명, 5명부터 정신병자 1명, 6명부터 중립 1명, 9명부터 중립 2명.
+// 인원수에 맞춰 역할을 뽑는다. 임포스터 1명(8명부터 2명), 5명부터 정신병자 1명, 6명부터 중립 1명, 9명부터 중립 2명.
 // ponytail: 구성은 자동. 방장이 직업을 고르는 설정은 필요해지면 추가.
 export function deal(n: number, rng: Rng = Math.random): { role: Role; team: Team; insane: boolean }[] {
-  const imposters = n >= 7 ? 2 : 1;
+  const imposters = n >= 8 ? 2 : 1; // 7명에 둘이면 첫 밤에 둘이 죽고 하루 만에 끝난다
   const neutrals = n >= 9 ? 2 : n >= 6 ? 1 : 0;
   const innocents = n - imposters - neutrals;
   const out = [
@@ -599,7 +599,7 @@ function tops(count: Map<string, number>): string[] {
 
 const tag = (role: Role, team: Team) => `${ROLES[role].name}(${TEAM_NAME[team]})`;
 // 본인도 모르는 것까지 포함한 진짜 정체
-const truth = (p: Player) => `${p.insane ? "정신병자·" : ""}${tag(p.role, p.team)}${p.stole ? "·원래 도둑" : ""}`;
+const truth = (p: Player) => `${p.insane ? `정신병자(${TEAM_NAME[p.team]})·${ROLES[p.role].name}인 줄 앎` : tag(p.role, p.team)}${p.stole ? "·원래 도둑" : ""}`;
 
 function die(p: Player, hidden = false) {
   p.alive = false;
@@ -642,6 +642,8 @@ function resolveNight(room: Room, rng: Rng) {
   const visiting = (p: Player) => !stopped.has(p) && goes(p).length > 0 && (!p.insane || p.role === "doctor");
   const visitors = (house: Player, except: Player) =>
     alive.filter((q) => q !== except && visiting(q) && goes(q).includes(house.id) && !UNSEEN.includes(q.role));
+  // 차례가 앞선 사람의 행동은 이미 통했다. 뒤 차례가 되돌리지 못한다.
+  const before = (a: Player, b: Player) => turnOf(room, a) >= 0 && turnOf(room, a) < turnOf(room, b);
   // 정신병자에게 줄 그럴듯한 가짜 이름 (없을 수도 있다)
   const someone = (...not: Player[]) => {
     const others = alive.filter((q) => !not.includes(q));
@@ -680,7 +682,7 @@ function resolveNight(room: Room, rng: Rng) {
     const tried = p.insane ? rng() < 0.5 : goes(t).length > 0 || t.act?.mode === "detonate";
     note(p, `${t.name} 님은 외출을 시도${tried ? "했습니다" : "하지 않았습니다"}.`, { kind: "blocker", who: t.id, tried });
     if (p.insane) continue;
-    if (UNSEEN.includes(t.role)) continue;
+    if (UNSEEN.includes(t.role) || before(t, p)) continue;
     stopped.set(t, "blocker");
     note(t, "경찰관에게 막혀 집 밖으로 나가지 못했습니다.", { kind: "blocked" });
   }
@@ -688,7 +690,7 @@ function resolveNight(room: Room, rng: Rng) {
   for (const p of users("trapper")) {
     if (stopped.has(p)) continue;
     const t = target(p);
-    const caught = p.insane ? [] : visitors(t, p);
+    const caught = p.insane ? [] : visitors(t, p).filter((q) => !before(q, p));
     if (caught.length) {
       const victim = oneOf(caught);
       stopped.set(victim, "trap");

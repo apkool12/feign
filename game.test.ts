@@ -83,7 +83,7 @@ for (let n = 4; n <= 10; n++) {
 
 // view: 남의 역할과 토큰이 새지 않고, 정신병자는 자기 정체를 모르고, 임포스터끼리는 서로를 안다
 {
-  const r = room("doctor", "doctor", "doctor", "doctor", "doctor", "doctor", "doctor");
+  const r = room("doctor", "doctor", "doctor", "doctor", "doctor", "doctor", "doctor", "doctor");
   start(r);
   assert.equal(r.day, 0);
   // 선거 중에는 아직 역할이 없다
@@ -801,3 +801,19 @@ for (let n = 4; n <= 10; n++) {
 }
 
 console.log("ok");
+
+// 앞 차례의 행동은 뒤 차례가 되돌리지 못한다: 양초를 이미 놓은 무속인은 경찰관에게 "막혔다"를 듣지 않는다
+{
+  const r = room("haunter", "blocker", "imp:blamer", "doctor", "lookout");
+  night(r, { 0: "ability p3", 1: "ability p0" });
+  assert.equal(r.players[0].mark, "p3");
+  assert.ok(!view(r, r.players[0]).me.scenes.some((s) => s.kind === "blocked"));
+  assert.deepEqual(view(r, r.players[1]).me.scenes, [{ kind: "blocker", who: "p0", tried: true }]);
+}
+// 덫은 이미 일을 끝낸 앞 차례(경찰관)를 잡지 않는다
+for (let seed = 0; seed < 8; seed++) {
+  const r = room("blocker", "imp:blamer", "trapper", "doctor", "lookout");
+  night(r, { 0: "ability p3", 1: "kill p3", 2: "ability p3" });
+  assert.ok(!view(r, r.players[0]).me.scenes.some((s) => s.kind === "trapped"));
+  assert.ok(view(r, r.players[1]).me.scenes.some((s) => s.kind === "trapped"));
+}
