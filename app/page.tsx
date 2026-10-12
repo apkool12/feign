@@ -1412,7 +1412,9 @@ function Game({ view, due, positions, send, leave }: GameProps) {
                 <small>{phase === "lobby" ? `방 · ${players.length}/${MAX_PLAYERS}` : title}</small>
                 <div className="t">{phase === "lobby" ? view.code : due !== null && <Countdown due={due} />}</div>
                 {/* 밤은 역할마다 차례대로 고른다 */}
-                {view.turn && <small style={{ marginTop: 5, opacity: view.turn.mine ? 1 : undefined }}>{view.turn.mine ? "내 차례" : `${view.turn.names.join("·")} 차례`}</small>}
+                {view.turn && (view.turn.mine || view.turn.names.length > 0) && (
+                  <small style={{ marginTop: 5, opacity: view.turn.mine ? 1 : undefined }}>{view.turn.mine ? "내 차례" : `${view.turn.names.join("·")} 차례`}</small>
+                )}
               </div>
             </div>
           )}
