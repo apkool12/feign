@@ -596,7 +596,11 @@ for (let n = 4; n <= 10; n++) {
 {
   const r = room("imp:blocker", "doctor", "lookout", "blocker");
   const [imp, doc, seen, cop] = r.players;
-  r.turn = 0; // 경찰관 → 임포스터 → 의사 → 감시자
+  // 밤의 첫머리에는 누구의 차례도 아니다
+  r.turn = -1;
+  assert.deepEqual(view(r, cop).turn, { names: [], mine: false });
+  assert.equal(rawAct(r, cop, "ability", "p0"), "지금은 내 차례가 아니에요");
+  assert.equal(pass(r), true); // 경찰관 → 임포스터 → 의사 → 감시자
   assert.deepEqual(view(r, doc).turn, { names: ["경찰관"], mine: false });
   assert.equal(view(r, cop).turn!.mine, true);
   assert.deepEqual(view(r, doc).me.modes, []);

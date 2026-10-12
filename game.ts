@@ -470,7 +470,7 @@ export const turnOf = (room: Room, p: Player) => turns(room).findIndex((t) => t.
 // 다음 차례로 넘긴다. 마지막 차례였으면 false (밤을 정산할 때다)
 export function pass(room: Room): boolean {
   if (room.phase !== "night" || room.turn >= turns(room).length - 1) return false;
-  room.turn++;
+  room.turn++; // -1(밤의 첫머리)에서 첫 차례로, 또는 다음 차례로
   return true;
 }
 
@@ -499,7 +499,7 @@ const aimId = (p: Player) => (p.act?.mode === "ability" ? p.act.target : (p.act?
 export function act(room: Room, p: Player, mode: string, target = "", guess = "", extra = ""): string | null {
   if (room.phase !== "night") return "지금은 행동할 수 없어요";
   if (!p.alive) return "죽은 사람은 행동할 수 없어요";
-  if (turnOf(room, p) !== room.turn) return "지금은 내 차례가 아니에요";
+  if (room.turn < 0 || turnOf(room, p) !== room.turn) return "지금은 내 차례가 아니에요";
   if (!modes(p).includes(mode as Mode)) {
     if (mode === "ability" && p.uses === 0) return "능력 횟수를 모두 썼어요";
     return "쓸 수 없는 행동이에요";
@@ -1032,7 +1032,7 @@ export function advance(room: Room, rng: Rng = Math.random) {
       p.scenes = [];
     }
     room.dawn = [];
-    room.turn = 0;
+    room.turn = -1; // 밤의 첫머리: 집으로 돌아가는 동안은 누구의 차례도 아니다 (역할을 읽을 시간, 추방 연출도 여기서 쓴다)
     room.phase = "night";
     room.day++;
   }
@@ -1097,7 +1097,7 @@ export function view(room: Room, me: Player, now = Date.now()) {
     turn: night
       ? {
           names: (turns(room)[room.turn] ?? []).filter((r) => r === "imposter" || room.roster.includes(r)).map((r) => (r === "imposter" ? "임포스터" : ROLES[r].name)),
-          mine: me.alive && turnOf(room, me) === room.turn,
+          mine: me.alive && room.turn >= 0 && turnOf(room, me) === room.turn,
         }
       : null,
     news: [...room.news, ...me.news],
@@ -1109,7 +1109,7 @@ export function view(room: Room, me: Player, now = Date.now()) {
       role: unknown ? null : me.role,
       team: me.team,
       uses: me.uses,
-      modes: night && me.alive && turnOf(room, me) === room.turn ? modes(me) : [],
+      modes: night && me.alive && room.turn >= 0 && turnOf(room, me) === room.turn ? modes(me) : [],
       both: night && me.alive && canDoBoth(room, me),
       will: playing && me.will,
       act: me.act,

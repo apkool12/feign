@@ -47,9 +47,9 @@ function schedule(room: G.Room, extra = 0) {
     scale *
     (room.phase === "night" ? G.TURN_MS : room.phase !== "day" ? 0 : room.day === 0 ? G.ELECTION_MS : day * 1000);
   room.deadline = null;
-  // 1일차 밤에는 역할을 읽을 시간을 더 준다
-  // 밤은 차례마다 시간을 잰다. 첫 차례에는 연출이 쓰는 시간도 더 준다
-  if (ms) arm(room, ms + (room.phase === "night" && room.turn === 0 ? G.DUSK_MS + extra + (room.day === 1 ? G.FIRST_NIGHT_MS : 0) : 0));
+  // 밤의 첫머리(차례 -1)는 연출과 역할 읽기에 쓰는 시간이고, 그 뒤 차례는 모두 똑같이 15초다
+  const prep = room.phase === "night" && room.turn < 0;
+  if (ms) arm(room, prep ? scale * (G.DUSK_MS + extra + (room.day === 1 ? G.FIRST_NIGHT_MS : 0)) : ms);
 }
 
 // 기다릴 사람이 없으면 곧 마감한다. 바로 넘기지 않는 것은 잘못 누른 선택을 바꿀 틈을 주기 위해서다.
