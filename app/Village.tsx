@@ -10,7 +10,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { clone } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { Bubble } from "./Bubble";
 import { COLORS } from "./colors";
-import { bedtime, casting, doorOpen, Doorway, DOORS, hinge, indoors, late, sky, tick, turn, useDark, useTurn } from "./Dusk";
+import { DUSK, bedtime, casting, doorOpen, Doorway, DOORS, hinge, indoors, late, sky, tick, turn, useDark, useTurn } from "./Dusk";
 import { AbilityEffect, Bomb, Burning, Burst, Candle, HeldBroom, RoleIcon, Shield } from "./Effects";
 import { Fire } from "./Fire";
 import { Post, Veil, toon } from "./Look";
@@ -1676,7 +1676,19 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
     if (!exile) scattered.current = false;
   });
   const night = scene === "night" || (!!replay && !CALM);
-  const inRoom = night && nightHome && !replay && !call && !exile;
+  // 낮에서 밤으로 넘어갈 때는 먼저 마을에서 다 같이 집으로 걸어 들어가고, 해가 다 진 뒤에 방 안으로 넘어간다
+  const sceneWas = useRef(scene);
+  const [dusking, setDusking] = useState(false);
+  const entering = sceneWas.current !== scene && scene === "night" && !CALM && !demo;
+  useEffect(() => {
+    const was = sceneWas.current;
+    sceneWas.current = scene;
+    if (was === scene || scene !== "night" || CALM || demo) return setDusking(false);
+    setDusking(true);
+    const timer = setTimeout(() => setDusking(false), (DUSK + 0.6) * 1000);
+    return () => clearTimeout(timer);
+  }, [scene, demo]);
+  const inRoom = night && nightHome && !replay && !call && !exile && !dusking && !entering;
   useEffect(() => {
     if (!CALM) setCutKey((k) => k + 1);
   }, [inRoom]);
