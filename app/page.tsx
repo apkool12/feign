@@ -242,6 +242,18 @@ function useEmoteWheel(canOpen: boolean, center: Point, onPick: (k: EmoteId) => 
   return { wheel, closeWheel };
 }
 
+function useCalmMotion() {
+  const [calm, setCalm] = useState(false);
+  useEffect(() => {
+    const mq = matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => setCalm(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+  return calm;
+}
+
 const icon = (d: React.ReactNode) => (
   <svg viewBox="0 0 24 24" aria-hidden>
     {d}
@@ -453,6 +465,69 @@ function ActVillageDemo({ demo }: { demo: string }) {
   );
 }
 
+function NightHomeDemo({ turn }: { turn: boolean }) {
+  const params = new URLSearchParams(location.search);
+  const skin = SKINS.includes(params.get("skin") as Skin) ? (params.get("skin") as Skin) : "blob";
+  const role = Object.hasOwn(ROLES, params.get("role") ?? "") ? (params.get("role") as Role) : "trapper";
+  const calm = useCalmMotion();
+  const positions = useRef<Positions>(new Map());
+  const [round, setRound] = useState(0);
+  const [home, setHome] = useState(true);
+  const [tail, setTail] = useState(false);
+  const [going, setGoing] = useState<string | null>(null);
+  useEffect(() => {
+    setHome(true);
+    setTail(false);
+    setGoing(null);
+    if (!turn) return;
+    const leave = setTimeout(() => {
+      setHome(false);
+      setGoing("demo-target");
+    }, calm ? 0 : 1200);
+    const act = setTimeout(() => setTail(true), calm ? 900 : 4200);
+    return () => {
+      clearTimeout(leave);
+      clearTimeout(act);
+    };
+  }, [turn, round, role, calm]);
+  const seats = [
+    demoSeat("demo-me", skin, "house-1", "none", 0),
+    demoSeat("demo-target", "hachiware", "house-4", "straw", 1),
+    demoSeat("demo-2", "usagi", "house-6", "bow", 2),
+    demoSeat("demo-3", "blob", "house-8", "wizard", 3),
+  ];
+  if (tail) seats[1].effect = role;
+  return (
+    <main className="fixed inset-0" style={{ background: "var(--sky)" }}>
+      <Village
+        key={round}
+        seats={seats}
+        scene="night"
+        going={going}
+        iconRole={tail ? role : null}
+        shield={tail && role === "survivor"}
+        actKind={tail ? role : null}
+        standKind={role}
+        nightHome={home}
+        nightReturn={tail}
+        nightDoorOpen={turn && home}
+        roomRole={role}
+        positions={positions}
+        demo
+        hud={false}
+        onNightHome={() => {
+          setHome(true);
+          setTail(false);
+          setGoing(null);
+          if (turn) setTimeout(() => setRound((x) => x + 1), calm ? 1200 : 2400);
+        }}
+        onPick={() => {}}
+        onMove={() => {}}
+      />
+    </main>
+  );
+}
+
 function EmoteDemo() {
   const params = new URLSearchParams(location.search);
   const skin = SKINS.includes(params.get("skin") as Skin) ? (params.get("skin") as Skin) : "blob";
@@ -618,6 +693,8 @@ export default function Page() {
   if (demo === null) return <main className="flex flex-1 flex-col" />;
   if (demo.startsWith("cutin")) return <CutInDemo still={demo === "cutin-still"} />;
   if (demo === "emote") return <EmoteDemo />;
+  if (demo === "night-home") return <NightHomeDemo turn={false} />;
+  if (demo === "night-turn") return <NightHomeDemo turn />;
   if (demo === "act-doctor" || demo === "recall-doctor-saved" || demo === "recall-slain" || demo === "recall-rescued" || demo === "dawn-blast" || demo === "act-cleaner") return <ActVillageDemo demo={demo} />;
   return (
     <main className="flex flex-1 flex-col">
@@ -1067,6 +1144,42 @@ function Game({ view, due, positions, send, leave }: GameProps) {
           ? me.act.mode
           : null
       : null;
+  const calmMotion = useCalmMotion();
+  const stayHomeTurn = night && me.alive && !!view.turn?.mine && me.role === "survivor" && me.modes.includes("armor") && targeted.length === 0;
+  const selfRoomAction = night && me.alive && !view.turn?.mine && me.role === "doctor" && me.act?.mode === "ability" && me.act.target === me.id;
+  const [nightHome, setNightHome] = useState(() => night && me.alive);
+  const [leftNight, setLeftNight] = useState(false);
+  const boltSeen = useRef("");
+  const nightRound = night ? `${view.day}` : "";
+  useEffect(() => {
+    setLeftNight(false);
+    boltSeen.current = "";
+    setNightHome(night && me.alive && !asList);
+  }, [nightRound, night, me.alive, asList]);
+  useEffect(() => {
+    if (!night || !me.alive || asList) {
+      setNightHome(false);
+      return;
+    }
+    if (view.turn?.mine && !stayHomeTurn) {
+      setLeftNight(true);
+      const timer = setTimeout(() => setNightHome(false), calmMotion ? 0 : 850);
+      return () => clearTimeout(timer);
+    }
+    if (!leftNight) setNightHome(true);
+    if (selfRoomAction) setNightHome(true);
+  }, [night, me.alive, asList, view.turn?.mine, stayHomeTurn, leftNight, calmMotion, selfRoomAction]);
+  const boltKey = night ? view.bolts.join("|") : "";
+  useEffect(() => {
+    if (!night || !me.alive || asList || !boltKey || view.turn?.mine || leftNight) return;
+    if (boltSeen.current === boltKey) return;
+    boltSeen.current = boltKey;
+    setNightHome(false);
+    const timer = setTimeout(() => setNightHome(true), calmMotion ? 0 : 2500);
+    return () => clearTimeout(timer);
+  }, [night, me.alive, asList, boltKey, view.turn?.mine, leftNight, calmMotion]);
+  const nightReturn = night && me.alive && leftNight && !view.turn?.mine && !nightHome && !selfRoomAction;
+  const freezeNightCut = night && me.alive && !view.turn?.mine && !leftNight && !nightHome;
   const standKind =
     night && me.alive && me.act
       ? me.act.mode === "ability"
@@ -1371,6 +1484,10 @@ function Game({ view, due, positions, send, leave }: GameProps) {
         shield={acted && me.act?.mode === "armor"}
         actKind={actKind}
         standKind={standKind}
+        nightHome={nightHome}
+        nightReturn={nightReturn}
+        nightDoorOpen={night && !!view.turn?.mine && !stayHomeTurn}
+        roomRole={me.role}
         positions={positions}
         replay={replay}
         onReplayEnd={() => setReplay(null)}
@@ -1388,9 +1505,10 @@ function Game({ view, due, positions, send, leave }: GameProps) {
         }}
         burnt={phase === "day" ? view.dawn.flatMap((e) => (e.kind === "death" && (e.blast || e.bolt) ? [e.who] : [])) : []}
         unseen={unseen}
-        freeze={emotes.wheel.open}
+        freeze={emotes.wheel.open || freezeNightCut}
         onMeScreen={(x, y) => setMeScreen({ x, y })}
         onSeen={(id) => setUnseen((ids) => ids.filter((x) => x !== id))}
+        onNightHome={() => setNightHome(true)}
         onPick={pickSeat}
         onMove={(x, z) => send({ t: "move", x, z })}
       />

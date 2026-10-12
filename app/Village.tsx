@@ -53,6 +53,10 @@ interface Props {
   shield: boolean; // 오늘 밤 갑옷을 입기로 했다
   actKind?: string | null; // 내 차례가 지난 뒤 보여 줄 몸짓
   standKind?: string | null; // 고른 집 앞에서 어느 자리로 설지
+  nightHome?: boolean; // 밤에 내 방 안을 보고 있는가
+  nightReturn?: boolean; // 외출 뒤 내 집으로 돌아가는 중인가
+  nightDoorOpen?: boolean; // 방 문을 열어 내 차례를 알린다
+  roomRole?: string | null; // 탁자 위에 놓을 내 역할 소품
   positions: RefObject<Positions>; // 다른 플레이어들이 보내 온 위치
   demo?: boolean; // 메뉴 배경: 조작 없이 카메라가 스스로 돈다 (이름이 빈 자리는 이름표도 없다)
   hud?: boolean; // 회상·발표 밑의 글을 보일지
@@ -68,6 +72,7 @@ interface Props {
   freeze?: boolean; // 감정표현 휠이 열린 동안 직접 걷지 않는다
   onMeScreen?: (x: number, y: number) => void;
   onSeen?: (id: string) => void;
+  onNightHome?: () => void;
   onPick: (id: string) => void;
   onMove: (x: number, z: number) => void;
 }
@@ -83,6 +88,26 @@ const UP = new THREE.Vector3(0, 1, 0);
 const forward = new THREE.Vector3();
 const right = new THREE.Vector3();
 const shift = new THREE.Vector3();
+const ROOM_ORIGIN = new THREE.Vector3(0, 120, -90); // 마을 땅(언덕·숲)에 묻히지 않게 하늘 높이 띄워 둔다
+const ROOM_CAMERA = new THREE.Vector3(0, 3.4, 6.2).add(ROOM_ORIGIN);
+const ROOM_LOOK = new THREE.Vector3(0, 0.7, -0.4).add(ROOM_ORIGIN);
+const ROOM_BOUNDS = { x: 1.9, z0: -1.35, z1: 1.35 };
+const ROOM_ANCHORS = {
+  "at-bed": new THREE.Vector3(1.25, 0.42, -0.95),
+  "at-sit": new THREE.Vector3(0.8, 0.42, -0.35),
+  "at-rug": new THREE.Vector3(0, 0.02, 0.2),
+  "at-bedside": new THREE.Vector3(0.45, 0.02, -0.45),
+  "at-door-in": new THREE.Vector3(-1.2, 0.02, -1.25),
+  "at-door-out": new THREE.Vector3(-1.2, 0.02, -2.25),
+  "at-window": new THREE.Vector3(0.9, 0.02, -1.25),
+  "at-pass-a": new THREE.Vector3(0.25, 0.02, -2.3),
+  "at-pass-b": new THREE.Vector3(1.55, 0.02, -2.3),
+  "at-prop": new THREE.Vector3(-1.55, 0.78, 0.05),
+  "at-lamp": new THREE.Vector3(-1.9, 1.0, -0.25),
+} as const;
+type RoomAnchorName = keyof typeof ROOM_ANCHORS;
+type RoomAnchors = Record<RoomAnchorName, THREE.Vector3>;
+const roomAnchors = () => Object.fromEntries(Object.entries(ROOM_ANCHORS).map(([k, v]) => [k, v.clone()])) as RoomAnchors;
 
 const ringRadius = (n: number) => 5.5 + n * 0.45;
 
@@ -238,7 +263,7 @@ const LOOP_ACT_CLIPS = new Set(["cpr", "halt", "spy", "shout", "sweep", "paint",
 export function actClip(kind: string | null | undefined) {
   return kind && Object.hasOwn(ACT_CLIP, kind) ? ACT_CLIP[kind as ActKind] : "cast";
 }
-function actSecs(kind: string | null | undefined) {
+export function actSecs(kind: string | null | undefined) {
   return LOOP_ACT_CLIPS.has(actClip(kind)) ? 6 : 2;
 }
 
@@ -346,7 +371,7 @@ export function Model({ file, paint, clip, face = "default", overhead, held, doo
   });
   // 풍차 날개(blades 노드)는 천천히 돈다. 문짝은 door가 가리키는 만큼 열린다.
   const blades = useMemo(() => scene.getObjectByName("blades"), [scene]);
-  const hinged = useMemo(() => (DOORS[file]?.swing ? hinge(scene) : undefined), [scene, file]);
+  const hinged = useMemo(() => (DOORS[file]?.swing || file === "room" ? hinge(scene) : undefined), [scene, file]);
   useFrame((_, dt) => {
     if (blades && !CALM) blades.rotation.z += dt * 0.7;
     if (hinged && door) hinged.rotation.y = -1.9 * door.current;
@@ -479,8 +504,9 @@ function useKeys(blocked = false) {
 
 // 카메라는 내 캐릭터를 따라다닌다. 오른쪽 버튼으로 끌면 돌려 보고, 휠로 당기고 민다.
 // (왼쪽 버튼은 집과 캐릭터를 누르는 데 쓴다)
-function Camera({ radius, controls, demo }: { radius: number; controls: RefObject<OrbitControls | null>; demo: boolean }) {
+function Camera({ radius, controls, demo, room }: { radius: number; controls: RefObject<OrbitControls | null>; demo: boolean; room: boolean }) {
   const { camera, gl } = useThree();
+  const mode = useRef<"demo" | "room" | "world" | null>(null);
   useEffect(() => {
     const made = new OrbitControls(camera, gl.domElement);
     made.enablePan = false;
@@ -504,8 +530,39 @@ function Camera({ radius, controls, demo }: { radius: number; controls: RefObjec
     };
   }, [camera, gl, controls, demo, radius]);
   useEffect(() => {
-    if (controls.current) controls.current.maxDistance = radius * 4;
-  }, [radius, controls]);
+    const c = controls.current;
+    if (!c) return;
+    const next = room ? "room" : demo ? "demo" : "world"; // 방 안은 메뉴 배경(demo)에서도 방 카메라로 본다
+    if (mode.current === next) {
+      if (next === "world") c.maxDistance = radius * 4;
+      return;
+    }
+    mode.current = next;
+    c.enabled = !demo;
+    c.autoRotate = next === "demo" && !CALM;
+    c.enableRotate = true;
+    c.minAzimuthAngle = -Infinity;
+    c.maxAzimuthAngle = Infinity;
+    c.minDistance = 5;
+    c.maxDistance = radius * 4;
+    c.minPolarAngle = 0.35;
+    c.maxPolarAngle = 1.3;
+    if (next === "room") {
+      c.minAzimuthAngle = -0.35;
+      c.maxAzimuthAngle = 0.35;
+      c.minDistance = 5.4;
+      c.maxDistance = 7.2;
+      c.minPolarAngle = 0.65;
+      c.maxPolarAngle = 1.05;
+      c.target.copy(ROOM_LOOK);
+      camera.position.copy(ROOM_CAMERA);
+      c.update();
+    } else {
+      c.target.set(0, 0, 0);
+      camera.position.set(0, next === "demo" ? 9 : 14.5, radius + 9);
+      c.update();
+    }
+  }, [camera, demo, radius, room, controls]);
   useFrame(() => {
     if (demo) controls.current?.update();
   });
@@ -898,6 +955,200 @@ export function Body({ seat, color, clip, ghost = false, held }: { seat: Seat; c
   );
 }
 
+function readRoomAnchors(root: THREE.Object3D): RoomAnchors {
+  root.updateWorldMatrix(true, true);
+  const made = roomAnchors();
+  const at = new THREE.Vector3();
+  for (const name of Object.keys(made) as RoomAnchorName[]) {
+    const found = root.getObjectByName(name);
+    if (!found) continue;
+    found.getWorldPosition(at);
+    made[name] = root.worldToLocal(at.clone());
+  }
+  return made;
+}
+
+function RoomModel({ door, onAnchors }: { door: RefObject<number>; onAnchors: (anchors: RoomAnchors) => void }) {
+  const gltf = useLoader(GLTFLoader, "/models/room.glb");
+  const scene = useMemo(() => {
+    const copy = clone(gltf.scene);
+    copy.traverse((o) => {
+      if (!(o instanceof THREE.Mesh)) return;
+      o.castShadow = true;
+      o.receiveShadow = true;
+      const mine = toon(o.material as THREE.Material);
+      mine.userData.base = mine.color.clone();
+      mine.userData.glow = mine.emissiveIntensity;
+      o.material = mine;
+    });
+    return copy;
+  }, [gltf]);
+  const hinged = useMemo(() => hinge(scene), [scene]);
+  useLayoutEffect(() => {
+    scene.traverse((o) => {
+      if (!(o instanceof THREE.Mesh)) return;
+      const m = o.material as THREE.MeshStandardMaterial;
+      m.color.copy(m.userData.base);
+      m.emissiveIntensity = m.userData.glow ?? 0;
+      if (m.name === "Glass") {
+        m.color.set("#25315f");
+        m.emissive.set("#8fa8ff");
+        m.emissiveIntensity = 0.25;
+        m.transparent = true;
+        m.opacity = 0.62;
+      } else if (m.name === "Glow") {
+        m.emissive.set("#ffb060");
+        m.emissiveIntensity = 1.1;
+      }
+    });
+    onAnchors(readRoomAnchors(scene));
+  }, [scene, onAnchors]);
+  useFrame(() => {
+    if (hinged) hinged.rotation.y = -door.current * Math.PI * 0.55;
+  });
+  return <primitive object={scene} />;
+}
+
+function BoxRoom({ door }: { door: RefObject<number> }) {
+  const hingeRef = useRef<THREE.Group>(null);
+  const mats = useMemo(
+    () => ({
+      floor: new THREE.MeshToonMaterial({ name: "Floor", color: "#9f7750" }),
+      wall: new THREE.MeshToonMaterial({ name: "Wall", color: "#d6b982" }),
+      wood: new THREE.MeshToonMaterial({ name: "Wood", color: "#6f4a2d" }),
+      cloth: new THREE.MeshToonMaterial({ name: "Cloth", color: "#d85f4f" }),
+      glass: new THREE.MeshToonMaterial({ name: "Glass", color: "#25315f", emissive: "#8fa8ff", emissiveIntensity: 0.25, transparent: true, opacity: 0.62 }),
+      glow: new THREE.MeshToonMaterial({ name: "Glow", color: "#ffbf6b", emissive: "#ffb060", emissiveIntensity: 1.2 }),
+      ink: new THREE.MeshBasicMaterial({ name: "Outline", color: "#2b2118" }),
+    }),
+    [],
+  );
+  useEffect(() => () => Object.values(mats).forEach((m) => m.dispose()), [mats]);
+  useFrame(() => {
+    if (hingeRef.current) hingeRef.current.rotation.y = -door.current * Math.PI * 0.55;
+  });
+  const wall = (key: string, size: [number, number, number], position: [number, number, number]) => (
+    <mesh key={key} position={position} castShadow receiveShadow material={mats.wall}>
+      <boxGeometry args={size} />
+    </mesh>
+  );
+  const doorX = -1.2;
+  const doorW = 0.78;
+  const doorH = 1.25;
+  return (
+    <group>
+      <mesh position={[0, -0.04, 0]} receiveShadow material={mats.floor}>
+        <boxGeometry args={[4.8, 0.08, 3.6]} />
+      </mesh>
+      {wall("back-l", [doorX - doorW / 2 + 2.4, 2.2, 0.08], [(-2.4 + doorX - doorW / 2) / 2, 1.1, -1.8])}
+      {wall("back-r", [2.4 - (doorX + doorW / 2), 2.2, 0.08], [(2.4 + doorX + doorW / 2) / 2, 1.1, -1.8])}
+      {wall("back-t", [doorW, 2.2 - doorH, 0.08], [doorX, doorH + (2.2 - doorH) / 2, -1.8])}
+      {wall("left", [0.08, 2.2, 3.6], [-2.4, 1.1, 0])}
+      {wall("right", [0.08, 2.2, 3.6], [2.4, 1.1, 0])}
+      <group ref={hingeRef} position={[doorX - doorW / 2, doorH / 2, -1.74]}>
+        <mesh position={[doorW / 2, 0, 0]} castShadow material={mats.wood}>
+          <boxGeometry args={[doorW, doorH, 0.07]} />
+        </mesh>
+        <mesh position={[doorW * 0.78, 0.02, 0.055]} material={mats.ink}>
+          <sphereGeometry args={[0.055, 10, 8]} />
+        </mesh>
+      </group>
+      <mesh position={[0.9, 1.12, -1.745]} material={mats.glass}>
+        <boxGeometry args={[1.0, 0.7, 0.02]} />
+      </mesh>
+      <mesh position={[0.9, 1.12, -1.73]} material={mats.wood}>
+        <boxGeometry args={[0.05, 0.76, 0.04]} />
+      </mesh>
+      <mesh position={[0.9, 1.12, -1.725]} material={mats.wood}>
+        <boxGeometry args={[1.06, 0.05, 0.04]} />
+      </mesh>
+      <mesh position={[1.5, 0.28, -0.65]} castShadow receiveShadow material={mats.wood}>
+        <boxGeometry args={[1.35, 0.34, 1.65]} />
+      </mesh>
+      <mesh position={[1.5, 0.5, -0.65]} castShadow receiveShadow material={mats.cloth}>
+        <boxGeometry args={[1.28, 0.18, 1.52]} />
+      </mesh>
+      <mesh position={[1.5, 0.64, -1.22]} castShadow receiveShadow material={mats.wall}>
+        <boxGeometry args={[0.92, 0.18, 0.34]} />
+      </mesh>
+      <mesh position={[-1.55, 0.5, 0.05]} castShadow receiveShadow material={mats.wood}>
+        <boxGeometry args={[0.9, 0.12, 0.65]} />
+      </mesh>
+      {[
+        [-1.9, 0.25, -0.18],
+        [-1.2, 0.25, -0.18],
+        [-1.9, 0.25, 0.28],
+        [-1.2, 0.25, 0.28],
+      ].map((p, i) => (
+        <mesh key={i} position={p as [number, number, number]} castShadow material={mats.wood}>
+          <boxGeometry args={[0.09, 0.5, 0.09]} />
+        </mesh>
+      ))}
+      <mesh position={[0, 0.025, 0.2]} receiveShadow material={mats.cloth}>
+        <boxGeometry args={[1.45, 0.03, 1.05]} />
+      </mesh>
+      <mesh position={ROOM_ANCHORS["at-lamp"].toArray()} material={mats.glow}>
+        <sphereGeometry args={[0.08, 10, 8]} />
+      </mesh>
+    </group>
+  );
+}
+
+function RoomDoor({ open, door }: { open: boolean; door: RefObject<number> }) {
+  useFrame((_, dt) => {
+    const to = open ? 1 : 0;
+    door.current += (to - door.current) * (CALM ? 1 : 1 - Math.exp(-dt * 8));
+  });
+  return null;
+}
+
+function RoomRoleProp({ role }: { role: string | null | undefined }) {
+  if (!role) return null;
+  if (role === "bomber")
+    return (
+      <group scale={0.55}>
+        <Bomb />
+      </group>
+    );
+  if (role === "haunter")
+    return (
+      <group scale={0.55}>
+        <Candle />
+      </group>
+    );
+  return <RoleIcon role={role} y={0.22} size={0.32} />;
+}
+
+function RoomStage({
+  doorOpen,
+  role,
+  children,
+}: {
+  doorOpen: boolean;
+  role?: string | null;
+  children: (anchors: RoomAnchors) => ReactNode;
+}) {
+  const door = useRef(0);
+  const [anchors, setAnchors] = useState<RoomAnchors>(() => roomAnchors());
+  const putAnchors = useMemo(() => (next: RoomAnchors) => setAnchors(next), []);
+  return (
+    <group position={ROOM_ORIGIN}>
+      <RoomDoor open={doorOpen} door={door} />
+      <Suspense fallback={null}>
+        <Fallback fallback={<BoxRoom door={door} />}>
+          <RoomModel door={door} onAnchors={putAnchors} />
+        </Fallback>
+      </Suspense>
+      <pointLight color="#ffb060" intensity={0.8} distance={4.2} position={anchors["at-lamp"].toArray()} />
+      <directionalLight color="#8fa8ff" intensity={1.15} position={[0.9, 1.7, -2.4]} />
+      <group position={anchors["at-prop"].toArray()} rotation-y={-0.25}>
+        <RoomRoleProp role={role} />
+      </group>
+      {children(anchors)}
+    </group>
+  );
+}
+
 // 가까운 쪽으로 돌아서 부드럽게 방향을 바꾼다
 function turnTo(g: THREE.Group, angle: number, k: number) {
   const d = angle - g.rotation.y;
@@ -1094,11 +1345,14 @@ type MeProps = {
   freeze: boolean;
   onMeScreen?: (x: number, y: number) => void;
   onActStart: () => void;
+  onActDone?: () => void;
+  homeward?: boolean;
+  onHome?: () => void;
   onMove: (x: number, z: number) => void;
 };
 
 // 내 캐릭터. WASD나 방향키로 직접 움직이고, 페이즈가 바뀌거나 집을 고르면 그리로 알아서 걸어간다.
-function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night, shock, sad, iconRole, shield, actKind, heldTools, land, collide, controls, freeze, onMeScreen, onActStart, onMove }: MeProps) {
+function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night, shock, sad, iconRole, shield, actKind, heldTools, land, collide, controls, freeze, onMeScreen, onActStart, onActDone, homeward = false, onHome, onMove }: MeProps) {
   const ref = useRef<THREE.Group>(null);
   const bed = useRef({ at: turn.at, from: new THREE.Vector3() });
   const puff = useRef<THREE.Group>(null);
@@ -1129,6 +1383,11 @@ function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night
     showHeld(kind);
     onActStart();
   };
+  const toldActDone = useRef<string | null>(null);
+  const toldHome = useRef(false);
+  useEffect(() => {
+    toldActDone.current = null;
+  }, [actKind]);
   useLayoutEffect(() => {
     ref.current?.position.set((start ?? to).x, 0, (start ?? to).z);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1144,6 +1403,7 @@ function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night
     if (!samePoint(lastTo.current, to)) {
       lastTo.current.copy(to);
       manual.current = false; // 새 목적지가 생기면 다시 알아서 걷는다
+      toldHome.current = false;
     }
     const k = keys.current;
     if (freeze) k.clear();
@@ -1223,6 +1483,10 @@ function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night
       arrived.cast = -1;
       if (actKind) startAct(actKind, t); // 능력을 쓴다
     }
+    if (actKind && act.current.name === actClip(actKind) && t >= act.current.until && toldActDone.current !== actKind) {
+      toldActDone.current = actKind;
+      onActDone?.();
+    }
     const calm = show ?? acting(act.current, seat, shock, sad, t, moving, night, moving ? null : liveEmote(seat));
     clip.current = progress < 1 ? "die" : !seat.alive ? (moving ? "walk" : "idle") : calm; // 죽은 뒤는 유령의 동작
     if (held.current && (moving || t >= act.current.until || act.current.name !== actClip(actKind))) showHeld(null);
@@ -1258,6 +1522,10 @@ function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night
       sent.current = { x: g.position.x, z: g.position.z, t };
       onMove(g.position.x, g.position.z);
     }
+    if (homeward && !moving && samePoint(g.position, to) && !toldHome.current) {
+      toldHome.current = true;
+      onHome?.();
+    }
   });
   return (
     <>
@@ -1271,13 +1539,124 @@ function Me({ seat, color, to, start, spot, wait, limit, acting: visiting, night
   );
 }
 
-export default function Village({ seats, scene, going, iconRole, shield, actKind = null, standKind = null, positions, demo = false, hud = true, heldTools = true, replay = null, onReplayEnd, call = null, onCallEnd, exile = null, onExileEnd, unseen = [], burnt = [], freeze = false, onMeScreen, onSeen, onPick, onMove }: Props) {
+function RoomResident({
+  seat,
+  color,
+  anchors,
+  actionKind,
+  shield,
+  freeze,
+  onMeScreen,
+}: {
+  seat: Seat;
+  color: string;
+  anchors: RoomAnchors;
+  actionKind: string | null;
+  shield: boolean;
+  freeze: boolean;
+  onMeScreen?: (x: number, y: number) => void;
+}) {
+  const ref = useRef<THREE.Group>(null);
+  const keys = useKeys(freeze);
+  const clip = useRef("idle");
+  const act = useRef(newAct(seat, 0));
+  const lastAction = useRef<string | null>(null);
+  const pace = useRef(0);
+  const projected = useRef(new THREE.Vector3());
+  const screen = useRef({ x: Infinity, y: Infinity, t: 0 });
+  useLayoutEffect(() => {
+    const at = anchors["at-bedside"];
+    ref.current?.position.set(at.x, at.y, at.z);
+  }, [anchors]);
+  useFrame((state, dt) => {
+    const g = ref.current;
+    if (!g) return;
+    const t = state.clock.elapsedTime;
+    if (lastAction.current !== actionKind) {
+      lastAction.current = actionKind;
+      if (actionKind) cut(act.current, actClip(actionKind), t, actSecs(actionKind));
+    }
+    const k = keys.current;
+    if (freeze) k.clear();
+    const ahead = freeze ? 0 : +(k.has("KeyW") || k.has("ArrowUp")) - +(k.has("KeyS") || k.has("ArrowDown"));
+    const side = freeze ? 0 : +(k.has("KeyD") || k.has("ArrowRight")) - +(k.has("KeyA") || k.has("ArrowLeft"));
+    let moving = false;
+    if (ahead || side) {
+      state.camera.getWorldDirection(forward);
+      forward.y = 0;
+      forward.normalize();
+      right.crossVectors(forward, UP);
+      const dx = forward.x * ahead + right.x * side;
+      const dz = forward.z * ahead + right.z * side;
+      const len = Math.hypot(dx, dz) || 1;
+      g.position.x = THREE.MathUtils.clamp(g.position.x + (dx / len) * SPEED * dt, -ROOM_BOUNDS.x, ROOM_BOUNDS.x);
+      g.position.z = THREE.MathUtils.clamp(g.position.z + (dz / len) * SPEED * dt, ROOM_BOUNDS.z0, ROOM_BOUNDS.z1);
+      turnTo(g, Math.atan2(dx, dz), Math.min(1, dt * 12));
+      moving = true;
+    }
+    clip.current = acting(act.current, seat, 0, false, t, moving, true, null);
+    if (moving && t > pace.current) {
+      pace.current = t + 0.42 * (0.95 + Math.random() * 0.1);
+      play("step", 0.35, 0.92);
+    }
+    if (onMeScreen && t - screen.current.t > 0.08) {
+      const p = projected.current.copy(g.position).add(ROOM_ORIGIN);
+      p.y += 0.75;
+      p.project(state.camera);
+      const r = state.gl.domElement.getBoundingClientRect();
+      const x = r.left + (p.x * 0.5 + 0.5) * r.width;
+      const y = r.top + (-p.y * 0.5 + 0.5) * r.height;
+      if (Number.isFinite(x) && Number.isFinite(y) && Math.hypot(x - screen.current.x, y - screen.current.y) > 1) {
+        screen.current = { x, y, t };
+        onMeScreen(x, y);
+      } else screen.current.t = t;
+    }
+  });
+  return (
+    <group ref={ref}>
+      <Body seat={seat} color={color} clip={clip} />
+      {shield && <Shield />}
+    </group>
+  );
+}
+
+function NightCut() {
+  const [on, setOn] = useState(!CALM);
+  useEffect(() => {
+    if (CALM) return;
+    const frame = requestAnimationFrame(() => setOn(false));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  if (CALM) return null;
+  return (
+    <div
+      aria-hidden
+      style={{
+        position: "absolute",
+        inset: 0,
+        pointerEvents: "none",
+        background: "#0b1026",
+        opacity: on ? 1 : 0,
+        transition: "opacity 250ms ease-out",
+      }}
+    />
+  );
+}
+
+export default function Village({ seats, scene, going, iconRole, shield, actKind = null, standKind = null, nightHome = false, nightReturn = false, nightDoorOpen = false, roomRole = null, positions, demo = false, hud = true, heldTools = true, replay = null, onReplayEnd, call = null, onCallEnd, exile = null, onExileEnd, unseen = [], burnt = [], freeze = false, onMeScreen, onSeen, onNightHome, onPick, onMove }: Props) {
   const n = seats.length;
   const spots = useMemo(() => layout(n), [n]);
   const [beat, setBeat] = useState(-1); // 회상·발표의 화면 아래 글이 어디까지 넘어갔나
   useEffect(() => setBeat(-1), [replay, call, exile]);
   const [actReady, setActReady] = useState(false);
+  const [actDone, setActDone] = useState(false);
+  const [headingHome, setHeadingHome] = useState(false);
+  const [cutKey, setCutKey] = useState(0);
   useEffect(() => setActReady(false), [scene, going, actKind, standKind]);
+  useEffect(() => {
+    setActDone(false);
+    setHeadingHome(false);
+  }, [scene, going, actKind, standKind]);
   // 추방 장면이 끝나면 사람들은 장면의 마지막 자리(물러선 광장)에서 이어받아, 거기서부터 집으로 돌아간다
   const scattered = useRef(false);
   if (exile) scattered.current = true;
@@ -1285,7 +1664,11 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
     if (!exile) scattered.current = false;
   });
   const night = scene === "night" || (!!replay && !CALM);
-  useTurn(night ? "night" : scene, !demo); // 회상이 도는 동안은 아직 밤이다. 끝나면 아침이 온다.
+  const inRoom = night && nightHome && !replay && !call && !exile;
+  useEffect(() => {
+    if (!CALM) setCutKey((k) => k + 1);
+  }, [inRoom]);
+  useTurn(night ? "night" : scene, !demo && !inRoom); // 회상이 도는 동안은 아직 밤이다. 끝나면 아침이 온다.
   const dark = useDark(night); // 모닥불 불빛과 화면 가장자리 그늘은 하늘이 반쯤 넘어갔을 때 바뀐다
   const radius = ringRadius(n);
   const goingIndex = seats.findIndex((s) => s.id === going);
@@ -1324,14 +1707,26 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
   useEffect(() => {
     positions.current.clear();
   }, [scene, positions]);
+  useEffect(() => {
+    if (nightReturn && (!actKind || actDone)) setHeadingHome(true);
+  }, [nightReturn, actKind, actDone]);
 
   return (
     <>
     <Canvas shadows camera={{ fov: 45 }} dpr={[1, 2]} aria-label="마을" onContextMenu={(e) => e.preventDefault()}>
-      <Camera radius={radius} controls={controls} demo={demo} />
+      <Camera radius={radius} controls={controls} demo={demo} room={inRoom} />
       <Atmosphere night={night} />
       <Post night={night} />
       <Scenery n={n} night={dark} land={land} props={props} />
+      {inRoom && (
+        <RoomStage doorOpen={nightDoorOpen} role={roomRole}>
+          {(anchors) => {
+            const me = seats.find((s) => s.isMe);
+            const i = Math.max(0, seats.findIndex((s) => s.isMe));
+            return me ? <RoomResident seat={me} color={COLORS[i % COLORS.length]} anchors={anchors} actionKind={actKind} shield={shield} freeze={freeze} onMeScreen={onMeScreen} /> : null;
+          }}
+        </RoomStage>
+      )}
       {seats.map((seat, i) => {
         const hidden = night && !!actKind && seat.id === going && !!seat.effect && !actReady;
         const shown = { ...seat, ...(unseen.includes(seat.id) ? { alive: true } : {}), ...(hidden ? { effect: null } : {}) };
@@ -1384,13 +1779,14 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
           onEnd={() => onCallEnd?.()}
         />
       )}
-      {!replay && !call && !exile && seats.map((seat, i) => {
+      {!inRoom && !replay && !call && !exile && seats.map((seat, i) => {
         const color = COLORS[i % COLORS.length];
         // 밤에는 집 앞(내가 고른 집이 있으면 그 집 앞), 낮에는 광장에 모인다
         const home = scene === "lobby" || night ? spots[i].door : spots[i].plaza;
         if (seat.isMe) {
           const targetHouse = goingIndex >= 0 ? seats[goingIndex].house : seat.house;
-          const to = night && goingTo ? actStand(standKind ?? actKind, goingTo, targetHouse) : home;
+          const outsideAct = headingHome ? null : actKind;
+          const to = headingHome ? home : night && goingTo ? actStand(standKind ?? outsideAct, goingTo, targetHouse) : home;
           return (
             <Me
               start={scattered.current ? spots[i].plaza.clone().multiplyScalar(1.4) : undefined}
@@ -1407,7 +1803,7 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
               sad={scene === "ended" && !seat.won}
               iconRole={iconRole}
               shield={shield}
-              actKind={actKind}
+              actKind={outsideAct}
               heldTools={heldTools}
               land={land}
               collide={collide}
@@ -1415,6 +1811,9 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
               freeze={freeze}
               onMeScreen={onMeScreen}
               onActStart={() => setActReady(true)}
+              onActDone={() => setActDone(true)}
+              homeward={headingHome}
+              onHome={onNightHome}
               onMove={onMove}
             />
           );
@@ -1426,6 +1825,7 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
       })}
     </Canvas>
     <Veil night={dark} />
+    {cutKey > 0 && <NightCut key={cutKey} />}
     {hud && (replay || call || exile) && <ReplayHud flash={replay} call={call} exile={exile} seats={seats} beat={beat} calm={CALM} />}
     </>
   );
