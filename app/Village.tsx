@@ -63,6 +63,8 @@ interface Props {
   heldTools?: boolean; // 손에 쥐는 도구 견본을 쓸지
   replay?: Flash | null; // 어젯밤 회상: 이 장면이 도는 동안 마을은 밤으로 돌아가고 평소의 캐릭터들은 물러난다
   onReplayEnd?: () => void;
+  roomReplay?: Flash | null; // 새벽에 내 방 안에서 먼저 보는 회상
+  onRoomReplayEnd?: () => void;
   exile?: Exile | null; // 추방: 풍선에 실려 날아가고 묘비가 떨어진다 (낮이 끝난 직후, 모두가 본다)
   onExileEnd?: () => void;
   call?: Call | null; // 아침 발표: 회상이 끝난 뒤, 모두가 광장에 모여 밤사이 공개된 일을 본다
@@ -1130,19 +1132,21 @@ function RoomRoleProp({ role }: { role: string | null | undefined }) {
 
 function RoomStage({
   doorOpen,
+  autoDoor = true,
   role,
   children,
 }: {
   doorOpen: boolean;
+  autoDoor?: boolean;
   role?: string | null;
-  children: (anchors: RoomAnchors) => ReactNode;
+  children: (anchors: RoomAnchors, door: RefObject<number>) => ReactNode;
 }) {
   const door = useRef(0);
   const [anchors, setAnchors] = useState<RoomAnchors>(() => roomAnchors());
   const putAnchors = useMemo(() => (next: RoomAnchors) => setAnchors(next), []);
   return (
     <group position={ROOM_ORIGIN}>
-      <RoomDoor open={doorOpen} door={door} />
+      {autoDoor && <RoomDoor open={doorOpen} door={door} />}
       <Suspense fallback={null}>
         <Fallback fallback={<BoxRoom door={door} />}>
           <RoomModel door={door} onAnchors={putAnchors} />
@@ -1153,7 +1157,7 @@ function RoomStage({
       <group position={anchors["at-prop"].toArray()} rotation-y={-0.25}>
         <RoomRoleProp role={role} />
       </group>
-      {children(anchors)}
+      {children(anchors, door)}
     </group>
   );
 }
@@ -1655,11 +1659,11 @@ function NightCut() {
   );
 }
 
-export default function Village({ seats, scene, going, iconRole, shield, actKind = null, standKind = null, nightHome = false, nightReturn = false, nightDoorOpen = false, roomRole = null, positions, demo = false, hud = true, heldTools = true, replay = null, onReplayEnd, call = null, onCallEnd, exile = null, onExileEnd, unseen = [], burnt = [], freeze = false, onMeScreen, onSeen, onNightHome, onPick, onMove }: Props) {
+export default function Village({ seats, scene, going, iconRole, shield, actKind = null, standKind = null, nightHome = false, nightReturn = false, nightDoorOpen = false, roomRole = null, positions, demo = false, hud = true, heldTools = true, replay = null, onReplayEnd, roomReplay = null, onRoomReplayEnd, call = null, onCallEnd, exile = null, onExileEnd, unseen = [], burnt = [], freeze = false, onMeScreen, onSeen, onNightHome, onPick, onMove }: Props) {
   const n = seats.length;
   const spots = useMemo(() => layout(n), [n]);
   const [beat, setBeat] = useState(-1); // 회상·발표의 화면 아래 글이 어디까지 넘어갔나
-  useEffect(() => setBeat(-1), [replay, call, exile]);
+  useEffect(() => setBeat(-1), [roomReplay, replay, call, exile]);
   const [actReady, setActReady] = useState(false);
   const [actDone, setActDone] = useState(false);
   const [headingHome, setHeadingHome] = useState(false);
@@ -1675,7 +1679,7 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
   useEffect(() => {
     if (!exile) scattered.current = false;
   });
-  const night = scene === "night" || (!!replay && !CALM);
+  const night = scene === "night" || (!!roomReplay && !CALM) || (!!replay && !CALM);
   // 낮에서 밤으로 넘어갈 때는 먼저 마을에서 다 같이 집으로 걸어 들어가고, 해가 다 진 뒤에 방 안으로 넘어간다
   const sceneWas = useRef(scene);
   const [dusking, setDusking] = useState(false);
@@ -1688,7 +1692,12 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
     const timer = setTimeout(() => setDusking(false), (DUSK + 0.6) * 1000);
     return () => clearTimeout(timer);
   }, [scene, demo]);
-  const inRoom = night && nightHome && !replay && !call && !exile && !dusking && !entering;
+  const inRoom = (!!roomReplay && !CALM) || (night && nightHome && !replay && !call && !exile && !dusking && !entering);
+  const splitReplay = useRef(false);
+  if (roomReplay && replay) splitReplay.current = true;
+  useEffect(() => {
+    if (!roomReplay && !replay) splitReplay.current = false;
+  }, [roomReplay, replay]);
   useEffect(() => {
     if (!CALM) setCutKey((k) => k + 1);
   }, [inRoom]);
@@ -1743,10 +1752,31 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
       <Post night={night} />
       <Scenery n={n} night={dark} land={land} props={props} />
       {inRoom && (
-        <RoomStage doorOpen={nightDoorOpen} role={roomRole}>
-          {(anchors) => {
+        <RoomStage doorOpen={nightDoorOpen && !roomReplay} autoDoor={!roomReplay} role={roomRole}>
+          {(anchors, door) => {
             const me = seats.find((s) => s.isMe);
             const i = Math.max(0, seats.findIndex((s) => s.isMe));
+            if (roomReplay)
+              return (
+                <group position={[-ROOM_ORIGIN.x, -ROOM_ORIGIN.y, -ROOM_ORIGIN.z]}>
+                  <Replay
+                    flash={roomReplay}
+                    room={{ origin: ROOM_ORIGIN, anchors, door }}
+                    limit={replay ? 4.7 : undefined}
+                    fitAll
+                    seats={seats}
+                    spots={spots}
+                    sizes={seats.map((s) => shapeOf(s.house).r)}
+                    heights={seats.map((s) => shapeOf(s.house).h)}
+                    doors={seats.map((s) => DOORS[s.house]?.z ?? 1.09)}
+                    land={land}
+                    calm={CALM}
+                    controls={controls}
+                    onBeat={setBeat}
+                    onEnd={() => onRoomReplayEnd?.()}
+                  />
+                </group>
+              );
             return me ? <RoomResident seat={me} color={COLORS[i % COLORS.length]} anchors={anchors} actionKind={actKind} shield={shield} freeze={freeze} onMeScreen={onMeScreen} /> : null;
           }}
         </RoomStage>
@@ -1756,9 +1786,11 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
         const shown = { ...seat, ...(unseen.includes(seat.id) ? { alive: true } : {}), ...(hidden ? { effect: null } : {}) };
         return <House key={seat.id} seat={shown} color={COLORS[i % COLORS.length]} spot={spots[i]} night={night} wait={late(i)} burnt={burnt.includes(seat.id) && !unseen.includes(seat.id)} heldTools={heldTools} onPick={onPick} />;
       })}
-      {replay && (
+      {!roomReplay && replay && (
         <Replay
           flash={replay}
+          limit={splitReplay.current ? 3.8 : undefined}
+          fitAll={splitReplay.current}
           seats={seats}
           spots={spots}
           sizes={seats.map((s) => shapeOf(s.house).r)}
@@ -1787,7 +1819,7 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
           onEnd={() => onExileEnd?.()}
         />
       )}
-      {!replay && !exile && call && (
+      {!roomReplay && !replay && !exile && call && (
         <Replay
           call={call.events}
           seats={seats}
@@ -1803,7 +1835,7 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
           onEnd={() => onCallEnd?.()}
         />
       )}
-      {!inRoom && !replay && !call && !exile && seats.map((seat, i) => {
+      {!inRoom && !roomReplay && !replay && !call && !exile && seats.map((seat, i) => {
         const color = COLORS[i % COLORS.length];
         // 밤에는 집 앞(내가 고른 집이 있으면 그 집 앞), 낮에는 광장에 모인다
         const home = scene === "lobby" || night ? spots[i].door : spots[i].plaza;
@@ -1850,7 +1882,7 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
     </Canvas>
     <Veil night={dark} />
     {cutKey > 0 && <NightCut key={cutKey} />}
-    {hud && (replay || call || exile) && <ReplayHud flash={replay} call={call} exile={exile} seats={seats} beat={beat} calm={CALM} />}
+    {hud && (roomReplay || replay || call || exile) && <ReplayHud flash={roomReplay ?? replay} call={roomReplay ? null : call} exile={exile} seats={seats} beat={beat} calm={CALM} />}
     </>
   );
 }

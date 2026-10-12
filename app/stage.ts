@@ -29,6 +29,11 @@ export const stage = {
 export type Flash = Scene[];
 export const flashOf = (scenes: Scene[]): Flash | null => (scenes.length ? scenes : null);
 
+const ROOM_FLASH_KINDS = new Set<Scene["kind"]>(["healed", "rescued", "slain", "raided", "provoked", "blocked"]);
+const inRoom = (scene: Scene) => ROOM_FLASH_KINDS.has(scene.kind);
+export const roomFlashOf = (scenes: Scene[]): Flash | null => flashOf(scenes.filter(inRoom));
+export const villageFlashOf = (scenes: Scene[]): Flash | null => flashOf(scenes.filter((scene) => !inRoom(scene)));
+
 // 아침 발표: 밤사이 모두에게 공개된 일(events)을 광장에서 하나씩 보여 준다. mine은 내가 따로 아는 것(밀고자 본인이 알아낸 역할 등).
 export type Call = { events: Dawn[]; mine: Scene[] };
 

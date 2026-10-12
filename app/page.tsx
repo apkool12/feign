@@ -11,10 +11,10 @@ import { periodsOf } from "./timeline";
 import type { Period, Step } from "./timeline";
 import { ambience } from "./sound";
 import { useVoiceMark, useVoiceOn, useVoicePrefs, voice } from "./voice";
-import { flashOf, stage, type Call, type Exile, type Flash } from "./stage";
+import { flashOf, roomFlashOf, stage, villageFlashOf, type Call, type Exile, type Flash } from "./stage";
 import type { Positions, Seat } from "./Village";
 import { DAY_CHOICES, HATS, HOUSES, INSANE, MAX_PLAYERS, MIN_PLAYERS, POOL, ROLES, SKINS, SKIP, TEAM_NAME } from "../game";
-import type { Hat, HistoryEntry, House, Mode, Role, Skin, Slot, Team, View } from "../game";
+import type { Hat, HistoryEntry, House, Mode, Role, Scene as GameScene, Skin, Slot, Team, View } from "../game";
 
 const SKIN_NAME: Record<Skin, string> = { blob: "기본", chiikawa: "치이카와", hachiware: "하치와레", usagi: "우사기" };
 const HOUSE_NAME: Record<House, string> = {
@@ -382,6 +382,9 @@ function demoSeat(id: string, skin: Skin, house: House, hat: Hat, i: number): Se
   };
 }
 
+type RoomFlashKind = Extract<GameScene["kind"], "healed" | "rescued" | "slain" | "raided" | "provoked" | "blocked">;
+const DAWN_ROOM_DEMOS = new Set<RoomFlashKind>(["healed", "rescued", "slain", "raided", "provoked", "blocked"]);
+
 function ActVillageDemo({ demo }: { demo: string }) {
   const params = new URLSearchParams(location.search);
   const skin = SKINS.includes(params.get("skin") as Skin) ? (params.get("skin") as Skin) : "blob";
@@ -461,6 +464,45 @@ function ActVillageDemo({ demo }: { demo: string }) {
           onMove={() => {}}
         />
       )}
+    </main>
+  );
+}
+
+function DawnRoomDemo({ kind }: { kind: RoomFlashKind }) {
+  const params = new URLSearchParams(location.search);
+  const skin = SKINS.includes(params.get("skin") as Skin) ? (params.get("skin") as Skin) : "blob";
+  const role = Object.hasOwn(ROLES, params.get("role") ?? "") ? (params.get("role") as Role) : "doctor";
+  const calm = useCalmMotion();
+  const positions = useRef<Positions>(new Map());
+  const [round, setRound] = useState(0);
+  const seats = [
+    demoSeat("demo-me", skin, "house-1", "none", 0),
+    demoSeat("demo-target", "hachiware", "house-4", "straw", 1),
+    demoSeat("demo-2", "usagi", "house-6", "bow", 2),
+    demoSeat("demo-3", "blob", "house-8", "wizard", 3),
+  ];
+  const flash: Flash = [{ kind }];
+  return (
+    <main className="fixed inset-0" style={{ background: "var(--sky)" }}>
+      <Village
+        key={round}
+        seats={seats}
+        scene="day"
+        going={null}
+        iconRole={null}
+        shield={false}
+        nightHome={!calm}
+        roomRole={role}
+        positions={positions}
+        demo
+        hud={false}
+        roomReplay={calm ? null : flash}
+        onRoomReplayEnd={() => setRound((x) => x + 1)}
+        replay={calm ? flash : null}
+        onReplayEnd={() => setRound((x) => x + 1)}
+        onPick={() => {}}
+        onMove={() => {}}
+      />
     </main>
   );
 }
@@ -695,6 +737,7 @@ export default function Page() {
   if (demo === "emote") return <EmoteDemo />;
   if (demo === "night-home") return <NightHomeDemo turn={false} />;
   if (demo === "night-turn") return <NightHomeDemo turn />;
+  if (demo.startsWith("dawn-") && DAWN_ROOM_DEMOS.has(demo.slice(5) as RoomFlashKind)) return <DawnRoomDemo kind={demo.slice(5) as RoomFlashKind} />;
   if (demo === "act-doctor" || demo === "recall-doctor-saved" || demo === "recall-slain" || demo === "recall-rescued" || demo === "dawn-blast" || demo === "act-cleaner") return <ActVillageDemo demo={demo} />;
   return (
     <main className="flex flex-1 flex-col">
@@ -1023,10 +1066,13 @@ function Game({ view, due, positions, send, leave }: GameProps) {
     };
   }, [reveal]);
 
-  // 밤이 끝나면 어젯밤 본 것(감시·추적)을 마을 안에서 다시 보여 준다
-  const flash = flashOf(me.scenes);
+  const calmMotion = useCalmMotion();
+  // 밤이 끝나면 당한 쪽 장면은 방 안에서 먼저 보고, 나머지만 마을 안에서 다시 보여 준다
+  const roomFlash = calmMotion ? null : roomFlashOf(me.scenes);
+  const flash = calmMotion ? flashOf(me.scenes) : villageFlashOf(me.scenes);
   // 마을이 낮을 한 순간도 먼저 보지 않게, 페이즈가 바뀐 그 렌더에서 바로 정한다
   const [before, setBefore] = useState(phase);
+  const [roomReplay, setRoomReplay] = useState<Flash | null>(null);
   const [replay, setReplay] = useState<Flash | null>(null);
   // 그 뒤에 모두가 보는 아침 발표가 이어진다. 발표가 닿기 전까지 밤사이 죽은 사람의 집은 멀쩡해 보인다.
   const [call, setCall] = useState<Call | null>(null);
@@ -1041,6 +1087,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
     const out = before === "day" && !asList ? players.find((p) => !p.alive && living.includes(p.id)) : undefined;
     setLiving(players.filter((p) => p.alive).map((p) => p.id));
     setBefore(phase);
+    setRoomReplay(dawn ? roomFlash : null);
     setReplay(dawn ? flash : null);
     setCall(dawn ? { events: view.dawn, mine: me.scenes } : null);
     setExile(out ? { who: out.id, reveal: out.label ?? "" } : null);
@@ -1050,9 +1097,10 @@ function Game({ view, due, positions, send, leave }: GameProps) {
 
   // 연출이 어떤 까닭으로든 끝나지 않으면 화면을 돌려준다
   useEffect(() => {
-    if (!replay && !call && !exile) return;
+    if (!roomReplay && !replay && !call && !exile) return;
     stage.hold(16000);
     const timer = setTimeout(() => {
+      setRoomReplay(null);
       setReplay(null);
       setCall(null);
       setExile(null);
@@ -1062,7 +1110,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
       clearTimeout(timer);
       stage.release();
     };
-  }, [replay, call, exile]);
+  }, [roomReplay, replay, call, exile]);
 
   // Tab: 마을 사람과 기록, Enter: 말하기
   useEffect(() => {
@@ -1144,7 +1192,6 @@ function Game({ view, due, positions, send, leave }: GameProps) {
           ? me.act.mode
           : null
       : null;
-  const calmMotion = useCalmMotion();
   const stayHomeTurn = night && me.alive && !!view.turn?.mine && me.role === "survivor" && me.modes.includes("armor") && targeted.length === 0;
   const selfRoomAction = night && me.alive && !view.turn?.mine && me.role === "doctor" && me.act?.mode === "ability" && me.act.target === me.id;
   const [nightHome, setNightHome] = useState(() => night && me.alive);
@@ -1218,7 +1265,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
       isMe,
       ally: p.ally,
       mayor: p.mayor,
-      enabled: me.alive && p.alive && usable && !replay && !call && !exile, // 연출이 카메라를 쓰는 동안은 누르지 못한다
+      enabled: me.alive && p.alive && usable && !roomReplay && !replay && !call && !exile, // 연출이 카메라를 쓰는 동안은 누르지 못한다
       mark: killing ? ("kill" as const) : aiming ? ("aim" as const) : voting ? ("vote" as const) : null,
       // 이 집에서 보여 줄 내 능력 연출
       // 내 차례가 끝난 뒤에 나온다 (고르는 동안은 표시만). 번개는 마법사의 차례가 끝나면 모두가 보고, 폭발은 아침에 본다.
@@ -1234,7 +1281,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
   const canStart = players.length >= MIN_PLAYERS && (view.setup.auto || view.setup.slots.length === players.length);
   const meIndex = Math.max(0, players.findIndex((p) => p.id === me.id));
   const resultOpen = phase === "ended" && !exile && shut !== phaseKey;
-  const canEmote = !asList && !night && !open && !replay && !call && !exile && !reveal && !resultOpen && !stage.busy();
+  const canEmote = !asList && !night && !open && !roomReplay && !replay && !call && !exile && !reveal && !resultOpen && !stage.busy();
   const chooseEmote = (k: EmoteId) => {
     // 하던 감정표현이 있어도 새로 고른 것이 바로 나온다
     emoted(me.id, k);
@@ -1489,6 +1536,8 @@ function Game({ view, due, positions, send, leave }: GameProps) {
         nightDoorOpen={night && !!view.turn?.mine && !stayHomeTurn}
         roomRole={me.role}
         positions={positions}
+        roomReplay={roomReplay}
+        onRoomReplayEnd={() => setRoomReplay(null)}
         replay={replay}
         onReplayEnd={() => setReplay(null)}
         exile={exile}
@@ -1521,7 +1570,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
         look={{ skin: players[meIndex]?.skin ?? "blob", hat: players[meIndex]?.hat ?? "none", color: COLORS[meIndex % COLORS.length] }}
       />
       {/* 회상이 도는 동안은 시계와 대화만 남긴다 */}
-      <div className={`pointer-events-none absolute inset-0 *:pointer-events-auto ${replay || call || exile ? "replaying" : ""}`}>
+      <div className={`pointer-events-none absolute inset-0 *:pointer-events-auto ${roomReplay || replay || call || exile ? "replaying" : ""}`}>
         <div className="keep !pointer-events-none absolute inset-x-0 top-0 flex flex-col items-center gap-2">
           {phase !== "ended" && (
             <div className="clock paper">
@@ -1536,7 +1585,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
               </div>
             </div>
           )}
-          {playing && !replay && !call && !exile && told !== phaseKey && brief.length > 0 && (
+          {playing && !roomReplay && !replay && !call && !exile && told !== phaseKey && brief.length > 0 && (
             <section key={phaseKey} aria-live="polite" className="toast paper max-w-[min(36rem,90vw)]">
               {brief.map((line, i) => (
                 <p key={i}>{line}</p>
@@ -1545,7 +1594,7 @@ function Game({ view, due, positions, send, leave }: GameProps) {
           )}
         </div>
 
-        {playing && !replay && !call && !exile && view.roster.length > 0 && (
+        {playing && !roomReplay && !replay && !call && !exile && view.roster.length > 0 && (
           <ul className="roster" aria-label="이번 판 역할">
             {/* 정신병자가 섞여 있을 수 있어, 누가 죽어도 패를 끄지 않는다 */}
             {view.roster.map((r, i) => (
