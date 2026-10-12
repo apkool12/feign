@@ -996,8 +996,7 @@ dialog.sheet::backdrop {
 }
 .menu .veil {
   pointer-events: none;
-  backdrop-filter: blur(2.5px);
-  background: rgb(24 34 16 / 0.2);
+  background: rgb(24 34 16 / 0.3);
 }
 .menu .left {
   position: absolute;
@@ -1031,6 +1030,12 @@ dialog.sheet::backdrop {
   width: clamp(260px, 26vw, 400px);
   height: clamp(280px, 50vh, 470px);
   pointer-events: none;
+}
+@media (max-width: 520px) {
+  .menu .me {
+    width: 150px;
+    height: 170px;
+  }
 }
 .menu .gear {
   position: absolute;

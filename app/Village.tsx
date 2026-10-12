@@ -368,6 +368,7 @@ export function Model({ file, paint, clip, face = "default", overhead, held, doo
     scene.traverse((o) => {
       if (!(o instanceof THREE.Mesh)) return;
       const m = o.material as THREE.MeshStandardMaterial;
+      if (!m.userData.base) return; // 손에 든 소품처럼 나중에 붙은 재질은 건드리지 않는다
       m.color.copy(m.userData.base);
       m.emissiveIntensity = m.userData.glow;
       m.transparent = false;
@@ -1007,7 +1008,7 @@ function RoomModel({ door, onAnchors }: { door: RefObject<number>; onAnchors: (a
         m.opacity = 0.62;
       } else if (m.name === "Glow") {
         m.emissive.set("#ffb060");
-        m.emissiveIntensity = 1.1;
+        m.emissiveIntensity = 0.7;
       }
     });
     onAnchors(readRoomAnchors(scene));
@@ -1148,8 +1149,8 @@ function RoomStage({
           <RoomModel door={door} onAnchors={putAnchors} />
         </Fallback>
       </Suspense>
-      <pointLight color="#ffb060" intensity={0.8} distance={4.2} position={anchors["at-lamp"].toArray()} />
-      <directionalLight color="#8fa8ff" intensity={1.15} position={[0.9, 1.7, -2.4]} />
+      <pointLight color="#ffb060" intensity={1.6} distance={7} position={anchors["at-lamp"].toArray()} />
+      <directionalLight color="#b9c4ff" intensity={0.45} position={[0.9, 1.7, -2.4]} />
       <group position={anchors["at-prop"].toArray()} rotation-y={-0.25}>
         <RoomRoleProp role={role} />
       </group>
@@ -1627,6 +1628,11 @@ function RoomResident({
   return (
     <group ref={ref}>
       <Body seat={seat} color={color} clip={clip} />
+      {/* 방에는 해 그림자가 없어 발밑에 납작한 그늘을 깐다 */}
+      <mesh rotation-x={-Math.PI / 2} position-y={0.012}>
+        <circleGeometry args={[0.4, 24]} />
+        <meshBasicMaterial color="#1a1020" transparent opacity={0.28} depthWrite={false} />
+      </mesh>
       {shield && <Shield />}
     </group>
   );
@@ -1741,7 +1747,10 @@ export default function Village({ seats, scene, going, iconRole, shield, actKind
       <Camera radius={radius} controls={controls} demo={demo} room={inRoom} />
       <Atmosphere night={night} />
       <Post night={night} />
-      <Scenery n={n} night={dark} land={land} props={props} />
+      {/* 방 안에서는 저 아래 마을의 산이 비쳐 보이지 않게 풍경을 숨긴다 */}
+      <group visible={!inRoom}>
+        <Scenery n={n} night={dark} land={land} props={props} />
+      </group>
       {inRoom && (
         <RoomStage doorOpen={nightDoorOpen} role={roomRole}>
           {(anchors) => {
